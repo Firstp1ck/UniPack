@@ -1,20 +1,36 @@
 [package]
 name = "packman"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-ratatui = "0.28"
-crossterm = "0.27"
+ratatui = "0.30.0"
+crossterm = "0.29.0"
 tokio = { version = "1", features = ["process", "rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
-thiserror = "1"
+thiserror = "2.0.18"
 chrono = "0.4"
+unicode-width = "0.2"
 
 [profile.release]
 strip = true
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+# Enable cognitive complexity lint to catch overly complex functions
+cognitive_complexity = "warn"
+# Warn until the crate is fully aligned with pedantic/nursery (see pacsea for deny).
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+# Keep docs linting consistent with clippy naming
+missing_docs_in_private_items = "warn"
+# Ignored tests run with:
+# cargo test -- --ignored
