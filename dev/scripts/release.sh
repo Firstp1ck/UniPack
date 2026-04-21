@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # release.sh - Automated version release script for Packman
 #
-# What: Automates version bumps, optional docs workflows, building, tag push, optional crates.io, and AUR.
+# What: Automates version bumps, release notes / changelog / README (manual IDE steps), build, tag push, optional crates.io, and AUR.
 #
 # Usage:
 #   ./release.sh [--dry-run] [--from-phase 5] [--pkgrel MODE] [version]
@@ -305,7 +305,6 @@ phase2_documentation() {
   local new_ver="${1}"
   local old_ver="${2}"
   local release_file="${PACKMAN_DIR}/Release-docs/RELEASE_v${new_ver}.md"
-  local announcement_file="${PACKMAN_DIR}/dev/ANNOUNCEMENTS/version_announcement_content.md"
 
   log_phase "2. Documentation"
 
@@ -325,35 +324,6 @@ phase2_documentation() {
   fi
 
   update_changelog "${new_ver}"
-
-  log_step "Auto-generate Announcement"
-  if [[ "${DRY_RUN}" == true ]]; then
-    log_info "[DRY-RUN] Would generate announcement from release file"
-  else
-    if [[ -f "${release_file}" ]]; then
-      generate_announcement "${release_file}" "${new_ver}"
-    else
-      log_warn "Skipping announcement generation (no release file)"
-    fi
-  fi
-
-  log_step "Update Version Announcement in Code"
-  if [[ "${DRY_RUN}" == true ]]; then
-    log_info "[DRY-RUN] Would run update_version_announcement.py"
-  else
-    if [[ -f "${announcement_file}" ]]; then
-      python3 "${PACKMAN_DIR}/dev/scripts/update_version_announcement.py" \
-        "${new_ver}" \
-        "Version ${new_ver}" \
-        --file "${announcement_file}" || {
-          log_error "Failed to update announcement"
-          confirm_continue "Continue anyway?" || return 1
-        }
-      log_success "Announcement updated in code"
-    else
-      log_warn "Announcement file not found, skipping..."
-    fi
-  fi
 
   log_step "Update README"
   printf "%b[INFO] %bFollow %b.cursor/commands/readme-update.md%b with your AI/IDE tooling.\n" "${BLUE}" "${RESET}" "${BOLD}" "${RESET}"
@@ -378,44 +348,6 @@ phase2_documentation() {
     update_security_md "${new_ver}"
   else
     log_info "Skipping SECURITY.md update (patch release only)"
-  fi
-}
-
-generate_announcement() {
-  local release_file="${1}"
-  local output_file="${PACKMAN_DIR}/dev/ANNOUNCEMENTS/version_announcement_content.md"
-  local tmp_output body_lines char_count
-
-  log_info "Extracting full ## What's New section from release file..."
-  body_lines="$(awk '/^##[[:space:]]+What/{sec=1;next} sec&&/^##[[:space:]]/{exit} sec{print}' "${release_file}")"
-  body_lines="$(printf "%s" "${body_lines}" | sed '/./,$!d' | sed ':a;/^\n*$/{$d;N;ba};')"
-
-  if [[ -z "${body_lines}" ]]; then
-    log_warn "No content found under ## What's New in ${release_file} — wrote header only; edit ${output_file} if needed"
-  fi
-
-  tmp_output="$(mktemp)"
-  {
-    printf "## What's New\n\n"
-    printf "%s\n" "${body_lines}"
-    printf "\n"
-  } > "${tmp_output}"
-
-  char_count="$(wc -c < "${tmp_output}" | xargs)"
-  if [[ "${char_count}" -gt 4000 ]]; then
-    log_info "Announcement is long (${char_count} bytes); shorten ${output_file} if the startup modal feels crowded"
-  fi
-
-  mv "${tmp_output}" "${output_file}"
-  log_success "Generated announcement (${char_count} bytes) at: ${output_file}"
-  echo
-  printf "%b--- Announcement Preview ---%b\n" "${CYAN}" "${RESET}"
-  cat "${output_file}"
-  printf "%b--- End Preview ---%b\n\n" "${CYAN}" "${RESET}"
-
-  if ! confirm_continue "Accept this announcement?"; then
-    log_info "Please edit the file manually..."
-    wait_for_user "Press Enter after editing ${output_file}..."
   fi
 }
 
@@ -596,7 +528,7 @@ phase4_build_release() {
 
   log_step "Creating git tag"
   if [[ "${DRY_RUN}" == true ]]; then
-    log_info "[DRY-RUN] Would create tag: ${tag}"
+    log_info "[DRY-RUN] Would create annotated tag: ${tag} (message: Release ${tag}, no editor)"
   else
     if git tag -l | rg -q "^${tag}$"; then
       log_warn "Tag ${tag} already exists"
@@ -608,7 +540,10 @@ phase4_build_release() {
         return 0
       fi
     fi
-    git tag "${tag}"
+    # Always pass -m: with tag.gpgSign=true, plain `git tag NAME` opens $EDITOR for the
+    # annotation, but stdout is mirrored via `tee` (enable_report_mirroring) so the editor
+    # is not on a real TTY and the buffer gets corrupted by escape codes from this script.
+    git tag -m "Release ${tag}" "${tag}"
     log_success "Created tag: ${tag}"
   fi
 
