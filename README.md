@@ -90,7 +90,7 @@ You need the **base-devel** group (for `makepkg`) and network access so the PKGB
 | `Tab` / `Shift+Tab` | Next / previous package manager |
 | `Ctrl+R`         | Refresh lists and pending-update counts |
 | `Esc`            | Leave search, or quit when not searching |
-| `q`              | Quit |
+| `q`              | Quit (only when not in search; in search, `q` is part of the query) |
 
 ---
 
@@ -100,8 +100,9 @@ You need the **base-devel** group (for `makepkg`) and network access so the PKGB
 # Launch PackMan
 packman
 
-# Show help
+# Show help (stdout, no TUI)
 packman --help
+packman -h
 ```
 
 **To install a package:** press `/`, type the name, then `i`.

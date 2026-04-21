@@ -1683,7 +1683,8 @@ pub fn run() {
         println!("  Shift+Tab     Switch package manager (backward)");
         println!("  Ctrl+R        Refresh package list");
         println!("  o             Toggle show only upgradable packages");
-        println!("  q or Esc      Quit");
+        println!("  Esc           Leave search, or quit when not searching");
+        println!("  q             Quit when not in search (in search, types into query)");
         println!();
         println!("Supported Package Managers:");
         println!("  pip, npm, bun, cargo, apt, pacman, aur, rpm, flatpak, snap, brew");
