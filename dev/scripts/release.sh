@@ -909,7 +909,7 @@ check_preflight() {
   expected_branch="$(
     git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true
   )"
-  [[ -n "${expected_branch}" ]] || expected_branch="master"
+  [[ -n "${expected_branch}" ]] || expected_branch="main"
 
   current_branch="$(git branch --show-current)"
   if [[ "${current_branch}" != "${expected_branch}" ]]; then

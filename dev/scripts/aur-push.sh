@@ -77,8 +77,9 @@ else
   fi
 fi
 
-if git push origin master; then
-  echo "${OK} Pushed to origin master"
+branch="$(git branch --show-current)"
+if git push origin "${branch}"; then
+  echo "${OK} Pushed to origin ${branch}"
 else
   echo "${FAIL} Push failed" >&2
   exit 1

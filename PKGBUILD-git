@@ -35,7 +35,7 @@ fetch_source() {
     git clone --filter=blob:none --sparse https://github.com/Firstp1ck/packman.git packman
   fi
   cd packman || exit 1
-  git pull --tags origin master 2>/dev/null || true
+  git pull --tags origin main 2>/dev/null || true
   git sparse-checkout init --no-cone
   git sparse-checkout set '/*' \
     '!/images' '!/dev' '!/.github' '!/.cursor' \
