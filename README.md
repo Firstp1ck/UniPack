@@ -49,7 +49,7 @@ PackMan lets you browse, search, install, remove, and upgrade packages across **
 ### From source
 
 ```bash
-git clone https://github.com/aliabdoxd14-sudo/packman
+git clone https://github.com/Firstp1ck/packman
 cd packman
 cargo build --release
 sudo cp target/release/packman /usr/local/bin/
@@ -57,10 +57,10 @@ sudo cp target/release/packman /usr/local/bin/
 
 ### Arch Linux (`makepkg`)
 
-This repository includes [`PKGBUILD-git`](PKGBUILD-git) for building and installing with Arch’s `makepkg`. It produces the `packman-git` package (provides `packman`) and pulls the latest sources during the build.
+This repository includes [`PKGBUILD`](PKGBUILD) for building and installing with Arch’s `makepkg`. It produces the `packman-git` package (provides `packman`) and pulls the latest sources during the build.
 
 ```bash
-git clone https://github.com/aliabdoxd14-sudo/packman
+git clone https://github.com/Firstp1ck/packman
 cd packman
 makepkg -si
 ```
