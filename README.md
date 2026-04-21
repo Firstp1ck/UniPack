@@ -5,7 +5,7 @@
 ![PackMan main TUI](images/Mainpage_v0.1.0.png)
 
 ![Rust](https://img.shields.io/badge/built_with-Rust-orange?style=flat-square&logo=rust)
-![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square)
 
 PackMan lets you browse, search, install, remove, and upgrade packages across **pip, npm, bun, cargo, apt, pacman, AUR, rpm, flatpak, snap, and brew** — all from one terminal UI. It **remembers your package lists between runs** so reopening feels quicker, and it can **show when updates are available** where the underlying tools support it. Press **`a`** anytime to open an **all-updates** view across every manager PackMan found: pick multiple rows and upgrade in one go.
@@ -62,7 +62,6 @@ This repository includes [`PKGBUILD-git`](PKGBUILD-git) for building and install
 ```bash
 git clone https://github.com/aliabdoxd14-sudo/packman
 cd packman
-cp PKGBUILD-git PKGBUILD
 makepkg -si
 ```
 
@@ -120,4 +119,4 @@ packman --help
 
 ## 📄 License
 
-MIT
+[MIT License](LICENSE)
