@@ -2,13 +2,15 @@
 
 > A unified TUI for keeping every package manager up to date.
 
-![UniPack main TUI](images/Mainpage_v0.1.1.png)
+![UniPack main TUI](images/Mainpage_v0.1.2.png)
 
 ![Rust](https://img.shields.io/badge/built_with-Rust-orange?style=flat-square&logo=rust)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square)
 
 UniPack lets you browse, search, upgrade, and remove packages across **pip, npm, bun, cargo, apt, pacman, AUR, rpm, flatpak, snap, and brew** — all from one terminal UI. It is focused on **keeping your system up to date**, not bootstrapping new installs: use your package manager of choice for first-time installs, then let UniPack handle the ongoing updates. It **remembers your package lists between runs** so reopening feels quicker, and it **shows when updates are available** where the underlying tools support it.
+
+When **`pacman`** is available (Arch and other pacman-based distros), global Python libraries belong in **`python-*`** packages (official repos and often the **AUR** under the same naming). UniPack’s **pip** tab then lists those `python-*` installs, runs upgrades/removes through **`sudo pacman`** when no AUR helper is present, and through **`yay`** or **`paru`** (whichever is installed) when you have one, so behaviour matches distro conventions instead of `pip install --user` / breaking system Python.
 
 ---
 
@@ -30,7 +32,7 @@ UniPack lets you browse, search, upgrade, and remove packages across **pip, npm,
 
 | Manager   | Platform       | Notes                         |
 |-----------|----------------|-------------------------------|
-| `pip`     | Linux / macOS  | Prefers `pip3` when present     |
+| `pip`     | Linux / macOS  | Elsewhere: `pip3` / PyPI. **If `pacman` exists:** installed **`python-*`** packages (repo + AUR); the list shows the **suffix after `python-`**; upgrades use **yay/paru** if available, otherwise **`sudo pacman`** |
 | `npm`     | Linux / macOS  | Global packages               |
 | `bun`     | Linux / macOS  | Global packages               |
 | `cargo`   | Linux / macOS  | Installed crates              |
@@ -115,7 +117,7 @@ unipack -h
 
 **To remove:** select a row and press `r`.
 
-**To install a new package:** use your package manager directly (for example `sudo pacman -S <pkg>`, `sudo apt install <pkg>`, `pip install <pkg>`). UniPack intentionally does not install new packages — it is focused on updates.
+**To install a new package:** use your package manager directly (for example `sudo pacman -S python-<name>`, `yay -S python-<name>` / `paru -S python-<name>` when using pacman-based repos/AUR, `sudo apt install <pkg>`, or `pip install --user <pkg>` when not using that layout). UniPack intentionally does not install new packages — it is focused on updates.
 
 ---
 

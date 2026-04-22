@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AppError, AppResult, Package, PackageManager};
 
-const CACHE_SCHEMA: u32 = 1;
+const CACHE_SCHEMA: u32 = 2;
 const CACHE_SUBDIR: &str = "unipack";
 const CACHE_FILENAME: &str = "package_lists.json";
 

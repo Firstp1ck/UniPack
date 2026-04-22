@@ -2,7 +2,7 @@
 #![allow(clippy::missing_docs_in_private_items)]
 #![allow(clippy::unused_self)] // list_* helpers share a signature for dispatch; most ignore `self`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::LazyLock;
 
@@ -43,6 +43,12 @@ pub(crate) fn merge_packages_with_latest_map(
     }
     for p in packages {
         let hit = match pm.name.as_str() {
+            "pip" if pip_uses_arch_pacman_for_global() => {
+                let key = p.installed_by.as_deref().unwrap_or(p.name.as_str());
+                map.get(key)
+                    .or_else(|| map.get(&key.to_ascii_lowercase()))
+                    .cloned()
+            }
             "pip" => map.get(&p.name.to_ascii_lowercase()).cloned(),
             _ => map.get(&p.name).cloned(),
         };
@@ -52,6 +58,31 @@ pub(crate) fn merge_packages_with_latest_map(
             p.latest_version = Some(latest);
             p.status = PackageStatus::Outdated;
         }
+    }
+}
+
+/// True when `pacman` is on `PATH` (Arch and pacman-based distros: global Python modules use `python-*` packages).
+#[must_use]
+pub fn pip_uses_arch_pacman_for_global() -> bool {
+    is_command_available("pacman")
+}
+
+fn pick_aur_helper_binary() -> Option<&'static str> {
+    if is_command_available("yay") {
+        Some("yay")
+    } else if is_command_available("paru") {
+        Some("paru")
+    } else {
+        None
+    }
+}
+
+/// Pacman package name for `python-*` CLI calls (`name` may be the stripped module name or full `python-*`).
+fn pip_pacman_cli_pkg_name(name: &str) -> String {
+    if name.starts_with("python-") {
+        name.to_string()
+    } else {
+        format!("python-{name}")
     }
 }
 
@@ -108,6 +139,12 @@ impl PackageManager {
     pub fn remove_package(&self, name: &str) -> AppResult<String> {
         ensure_privileges_ready(self.name.as_str())?;
         let output = match self.name.as_str() {
+            "pip" if pip_uses_arch_pacman_for_global() => {
+                let pkg = pip_pacman_cli_pkg_name(name);
+                Command::new("sudo")
+                    .args(["pacman", "-R", "--noconfirm", &pkg])
+                    .output()?
+            }
             "pip" => Command::new(&self.command)
                 .args(["uninstall", "-y", name])
                 .output()?,
@@ -168,6 +205,18 @@ impl PackageManager {
         }
 
         let output = match self.name.as_str() {
+            "pip" if pip_uses_arch_pacman_for_global() => {
+                let pkg = pip_pacman_cli_pkg_name(name);
+                if let Some(aur) = pick_aur_helper_binary() {
+                    Command::new(aur)
+                        .args(["-S", "--needed", "--noconfirm", &pkg])
+                        .output()?
+                } else {
+                    Command::new("sudo")
+                        .args(["pacman", "-S", "--needed", "--noconfirm", &pkg])
+                        .output()?
+                }
+            }
             "pip" => Command::new(&self.command)
                 .args(["install", "--upgrade", name])
                 .output()?,
@@ -219,7 +268,7 @@ impl PackageManager {
         match self.name.as_str() {
             "pip" => count_pip_updates(),
             "npm" => count_npm_updates(),
-            "bun" => count_bun_updates(),
+            "bun" => self.count_bun_outdated_after_merge(),
             "cargo" => count_cargo_updates(),
             "brew" => count_brew_updates(),
             "apt" => count_apt_updates(),
@@ -233,6 +282,10 @@ impl PackageManager {
     }
 
     fn list_pip(&self) -> AppResult<Vec<Package>> {
+        if pip_uses_arch_pacman_for_global() {
+            return Self::list_arch_python_pacman_packages();
+        }
+
         let output = Command::new("sh")
             .args([
                 "-c",
@@ -258,6 +311,48 @@ impl PackageManager {
                 description: String::new(),
                 repository: None,
                 installed_by: None,
+            });
+        }
+
+        Ok(result)
+    }
+
+    /// Installed `python-*` packages from pacman (Arch global Python modules).
+    fn list_arch_python_pacman_packages() -> AppResult<Vec<Package>> {
+        let output = Command::new("sh")
+            .args(["-c", "pacman -Q 2>/dev/null"])
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut result = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let full = parts[0];
+            if !full.starts_with("python-") {
+                continue;
+            }
+            let display = full
+                .strip_prefix("python-")
+                .filter(|s| !s.is_empty())
+                .unwrap_or(full)
+                .to_string();
+            result.push(Package {
+                name: display,
+                version: parts[1].to_string(),
+                latest_version: None,
+                status: PackageStatus::Installed,
+                size: 0,
+                description: String::new(),
+                repository: Some("pacman".to_string()),
+                installed_by: Some(full.to_string()),
             });
         }
 
@@ -299,6 +394,17 @@ impl PackageManager {
         }
 
         Ok(result)
+    }
+
+    /// Updatable **global** packages: same list + merge as the UI, so the tab count matches `outdated` rows.
+    fn count_bun_outdated_after_merge(&self) -> AppResult<usize> {
+        let mut pkgs = self.list_installed_packages()?;
+        let map = latest_map_bun()?;
+        merge_packages_with_latest_map(self, &mut pkgs, &map);
+        Ok(pkgs
+            .iter()
+            .filter(|p| p.status == PackageStatus::Outdated)
+            .count())
     }
 
     fn list_bun(&self) -> AppResult<Vec<Package>> {
@@ -641,6 +747,18 @@ fn fetch_latest_version_map(pm: &PackageManager) -> AppResult<HashMap<String, St
 }
 
 fn latest_map_pip() -> AppResult<HashMap<String, String>> {
+    if pip_uses_arch_pacman_for_global() {
+        let mut m = if let Some(aur) = pick_aur_helper_binary() {
+            latest_map_from_qu_output(&format!("{aur} -Qu 2>/dev/null"))?
+        } else if is_command_available("checkupdates") {
+            latest_map_from_qu_output("checkupdates 2>/dev/null")?
+        } else {
+            latest_map_from_qu_output("pacman -Qu 2>/dev/null")?
+        };
+        m.retain(|name, _| name.starts_with("python-"));
+        return Ok(m);
+    }
+
     let output = run_shell(
         "pip list --outdated --format=json 2>/dev/null || pip3 list --outdated --format=json 2>/dev/null",
     )?;
@@ -816,8 +934,25 @@ fn latest_map_pacman() -> AppResult<HashMap<String, String>> {
     latest_map_from_qu_output("pacman -Qu 2>/dev/null")
 }
 
+/// Names of packages explicitly installed from the AUR (`-Qem`), matching [`PackageManager::list_aur`].
+fn aur_explicit_foreign_names(cmd: &str) -> AppResult<HashSet<String>> {
+    let output = run_shell(&format!("{cmd} -Qem 2>/dev/null"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut names = HashSet::new();
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            names.insert(parts[0].to_string());
+        }
+    }
+    Ok(names)
+}
+
 fn latest_map_aur(cmd: &str) -> AppResult<HashMap<String, String>> {
-    latest_map_from_qu_output(&format!("{cmd} -Qu 2>/dev/null"))
+    let mut m = latest_map_from_qu_output(&format!("{cmd} -Qu 2>/dev/null"))?;
+    let foreign = aur_explicit_foreign_names(cmd)?;
+    m.retain(|name, _| foreign.contains(name));
+    Ok(m)
 }
 
 #[allow(clippy::literal_string_with_formatting_args)]
@@ -902,7 +1037,8 @@ fn run_shell(cmd: &str) -> AppResult<std::process::Output> {
 }
 
 fn ensure_privileges_ready(pm_name: &str) -> AppResult<()> {
-    let needs_sudo = matches!(pm_name, "apt" | "snap" | "pacman" | "rpm" | "aur");
+    let needs_sudo = matches!(pm_name, "apt" | "snap" | "pacman" | "rpm" | "aur")
+        || (pm_name == "pip" && pip_uses_arch_pacman_for_global());
     if !needs_sudo {
         return Ok(());
     }
@@ -921,6 +1057,10 @@ fn ensure_privileges_ready(pm_name: &str) -> AppResult<()> {
 }
 
 fn count_pip_updates() -> AppResult<usize> {
+    if pip_uses_arch_pacman_for_global() {
+        return Ok(latest_map_pip()?.len());
+    }
+
     let output = run_shell(
         "pip list --outdated --format=json 2>/dev/null || pip3 list --outdated --format=json 2>/dev/null",
     )?;
@@ -947,30 +1087,6 @@ fn count_npm_updates() -> AppResult<usize> {
             })
             .count()
     });
-    Ok(count)
-}
-
-fn count_bun_updates() -> AppResult<usize> {
-    let output = run_shell("bun outdated -g 2>/dev/null; true")?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let count = stdout
-        .lines()
-        .filter(|l| {
-            let trimmed = l.trim();
-            if trimmed.is_empty() {
-                return false;
-            }
-            if trimmed.starts_with('|') {
-                let lower = trimmed.to_lowercase();
-                !(trimmed
-                    .chars()
-                    .all(|c| c == '|' || c == '-' || c.is_whitespace())
-                    || (lower.contains("package") && lower.contains("current")))
-            } else {
-                false
-            }
-        })
-        .count();
     Ok(count)
 }
 
@@ -1008,9 +1124,7 @@ fn count_pacman_updates() -> AppResult<usize> {
 }
 
 fn count_aur_updates(cmd: &str) -> AppResult<usize> {
-    let output = run_shell(&format!("{cmd} -Qu 2>/dev/null"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().filter(|l| !l.trim().is_empty()).count())
+    Ok(latest_map_aur(cmd)?.len())
 }
 
 fn count_rpm_updates() -> AppResult<usize> {

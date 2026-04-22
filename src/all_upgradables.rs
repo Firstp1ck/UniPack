@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use crate::pkg_manager::PackageManager;
+use crate::pkg_manager::{PackageManager, pip_uses_arch_pacman_for_global};
 use crate::{Package, PackageStatus};
 
 /// One upgradable row for the bulk-update overlay.
@@ -14,8 +14,10 @@ pub struct UpgradableRow {
     pub pm_index: usize,
     /// Short backend label (for example `pip` or `pacman`).
     pub pm_name: String,
-    /// Package name used for display and upgrade commands.
+    /// Package name shown in the UI (e.g. stripped `python-` on pacman-based pip mode).
     pub name: String,
+    /// When set, passed to the package manager for upgrades instead of [`Self::name`].
+    pub upgrade_package_name: Option<String>,
     /// Installed or current version string.
     pub old_version: String,
     /// Reported target version string.
@@ -52,10 +54,16 @@ fn push_upgradable_rows_from_packages(
         if new_version == p.version {
             continue;
         }
+        let upgrade_package_name = if pm_name == "pip" && pip_uses_arch_pacman_for_global() {
+            p.installed_by.clone()
+        } else {
+            None
+        };
         rows.push(UpgradableRow {
             pm_index,
             pm_name: pm_name.to_string(),
             name: p.name.clone(),
+            upgrade_package_name,
             old_version: p.version.clone(),
             new_version,
         });
@@ -175,6 +183,7 @@ mod tests {
                 pm_index: 1,
                 pm_name: "npm".to_string(),
                 name: "alpha".to_string(),
+                upgrade_package_name: None,
                 old_version: "1".to_string(),
                 new_version: "2".to_string(),
             },
@@ -182,6 +191,7 @@ mod tests {
                 pm_index: 0,
                 pm_name: "apt".to_string(),
                 name: "zzz".to_string(),
+                upgrade_package_name: None,
                 old_version: "1".to_string(),
                 new_version: "2".to_string(),
             },
@@ -189,6 +199,7 @@ mod tests {
                 pm_index: 0,
                 pm_name: "apt".to_string(),
                 name: "aaa".to_string(),
+                upgrade_package_name: None,
                 old_version: "1".to_string(),
                 new_version: "2".to_string(),
             },

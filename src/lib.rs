@@ -28,7 +28,7 @@ mod pkg_manager;
 pub use all_upgradables::{
     UpgradableRow, collect_all_upgradables, collect_upgradables_from_cached_lists,
 };
-use pkg_manager::{PackageManager, merge_packages_with_latest_map};
+use pkg_manager::{PackageManager, merge_packages_with_latest_map, pip_uses_arch_pacman_for_global};
 
 /// Recoverable failures surfaced to the user or propagated from subprocess I/O.
 #[derive(Error, Debug)]
@@ -615,6 +615,15 @@ pub fn detect_distro() -> String {
     "Unknown Linux".to_string()
 }
 
+/// Pacman `python-*` package name for pip-on-pacman remove/upgrade (`p.name` is shown without the prefix).
+fn pip_pacman_op_arg(pm: &PackageManager, p: &Package) -> String {
+    if pm.name == "pip" && pip_uses_arch_pacman_for_global() {
+        p.installed_by.clone().unwrap_or_else(|| p.name.clone())
+    } else {
+        p.name.clone()
+    }
+}
+
 fn detect_package_managers() -> Vec<PackageManager> {
     const PM_CONFIGS: &[(&str, &str, &str, bool)] = &[
         ("pip", "pip3", "pip", false),
@@ -654,6 +663,31 @@ fn detect_package_managers() -> Vec<PackageManager> {
                 needs_root: needs_root || sudo_ok,
             });
         }
+    }
+
+    if pip_uses_arch_pacman_for_global() {
+        if let Some(pm) = managers.iter_mut().find(|m| m.name == "pip") {
+            pm.available = true;
+            pm.needs_root = true;
+        } else {
+            managers.push(PackageManager {
+                name: "pip".to_string(),
+                command: "pip3".to_string(),
+                list_command: "pacman".to_string(),
+                available: true,
+                needs_root: true,
+            });
+        }
+    }
+
+    if !managers.iter().any(|m| m.name == "aur") && is_command_available("paru") {
+        managers.push(PackageManager {
+            name: "aur".to_string(),
+            command: "paru".to_string(),
+            list_command: "paru".to_string(),
+            available: true,
+            needs_root: sudo_ok,
+        });
     }
 
     managers
@@ -852,12 +886,28 @@ fn version_cell_line(pkg: &Package, base: Style) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Second info-strip line when the pip tab lists `python-*` pacman packages instead of `PyPI`.
+fn pip_tab_uses_pacman_python_packages(app: &App) -> bool {
+    app.package_managers
+        .get(app.active_pm_index)
+        .is_some_and(|p| p.name == "pip" && pip_uses_arch_pacman_for_global())
+}
+
+fn info_strip_height(app: &App) -> u16 {
+    if pip_tab_uses_pacman_python_packages(app) {
+        2
+    } else {
+        1
+    }
+}
+
 fn render_app(frame: &mut Frame, app: &App) {
+    let info_h = info_strip_height(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(1),
+            Constraint::Length(info_h),
             Constraint::Min(0),
             Constraint::Length(4),
         ])
@@ -898,7 +948,23 @@ fn current_info_text(app: &App) -> String {
         )
 }
 
+const PIP_PACMAN_INFO_NOTE: &str =
+    "pacman present: pip tab lists system `python-*` packages (pacman/yay/paru), not PyPI/pip.";
+
 fn render_info_strip(f: &mut Frame, app: &App, area: Rect) {
+    let show_pip_pacman_note = pip_tab_uses_pacman_python_packages(app) && area.height >= 2;
+    let note_area = |full: Rect| -> (Rect, Option<Rect>) {
+        if show_pip_pacman_note {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Length(1)])
+                .split(full);
+            (rows[0], Some(rows[1]))
+        } else {
+            (full, None)
+        }
+    };
+
     if let Some(progress) = app.single_upgrade.as_ref() {
         let elapsed_millis =
             u64::try_from(progress.started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -911,7 +977,17 @@ fn render_info_strip(f: &mut Frame, app: &App, area: Rect) {
                 progress.package_name, elapsed_seconds
             ))
             .percent(pct);
-        f.render_widget(gauge, area);
+        let (main_area, note_row) = note_area(area);
+        f.render_widget(gauge, main_area);
+        if let Some(nr) = note_row {
+            let note = clip_display_width(PIP_PACMAN_INFO_NOTE, nr.width);
+            f.render_widget(
+                Paragraph::new(note)
+                    .style(Style::default().fg(COLORS.secondary).bg(COLORS.surface))
+                    .alignment(Alignment::Left),
+                nr,
+            );
+        }
         return;
     }
 
@@ -925,7 +1001,18 @@ fn render_info_strip(f: &mut Frame, app: &App, area: Rect) {
     let text = Paragraph::new(info)
         .style(Style::default().fg(info_color).bg(COLORS.surface))
         .alignment(Alignment::Left);
-    f.render_widget(text, area);
+
+    let (main_area, note_row) = note_area(area);
+    f.render_widget(text, main_area);
+    if let Some(nr) = note_row {
+        let note = clip_display_width(PIP_PACMAN_INFO_NOTE, nr.width);
+        f.render_widget(
+            Paragraph::new(note)
+                .style(Style::default().fg(COLORS.secondary).bg(COLORS.surface))
+                .alignment(Alignment::Left),
+            nr,
+        );
+    }
 }
 
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
@@ -1377,7 +1464,8 @@ fn upgrade_all_upgradables_selection(app: &mut App, multi_upgrade_tx: &MultiUpgr
         return;
     }
     let indices: Vec<usize> = overlay.selected.iter().copied().collect();
-    let mut tasks: Vec<(usize, PackageManager, String)> = Vec::with_capacity(indices.len());
+    let mut tasks: Vec<(usize, PackageManager, String, String)> =
+        Vec::with_capacity(indices.len());
     for idx in indices {
         let Some(row) = overlay.rows.get(idx) else {
             continue;
@@ -1385,7 +1473,11 @@ fn upgrade_all_upgradables_selection(app: &mut App, multi_upgrade_tx: &MultiUpgr
         let Some(pm) = app.package_managers.get(row.pm_index) else {
             continue;
         };
-        tasks.push((row.pm_index, pm.clone(), row.name.clone()));
+        let op_arg = row
+            .upgrade_package_name
+            .clone()
+            .unwrap_or_else(|| row.name.clone());
+        tasks.push((row.pm_index, pm.clone(), op_arg, row.name.clone()));
     }
     if tasks.is_empty() {
         return;
@@ -1400,14 +1492,14 @@ fn upgrade_all_upgradables_selection(app: &mut App, multi_upgrade_tx: &MultiUpgr
     app.message = Some(format!("Starting upgrade of {} package(s)...", tasks.len()));
     let tx = multi_upgrade_tx.clone();
     std::thread::spawn(move || {
-        for (pm_index, pm, name) in tasks {
+        for (pm_index, pm, op_arg, display_name) in tasks {
             let _ = tx.send(MultiUpgradeProgressEvent::StepStart {
-                package_name: name.clone(),
+                package_name: display_name.clone(),
             });
-            let result = pm.upgrade_package(&name);
+            let result = pm.upgrade_package(&op_arg);
             let _ = tx.send(MultiUpgradeProgressEvent::StepDone {
                 pm_index,
-                package_name: name,
+                package_name: display_name,
                 result,
             });
         }
@@ -1643,15 +1735,34 @@ fn handle_pm_switch(app: &mut App) {
     clamp_pm_selection(app);
 }
 
+fn is_privilege_sudo_toast(msg: &str) -> bool {
+    msg.contains("actions may require sudo") && msg.contains("sudo -v")
+}
+
 fn maybe_show_privilege_hint(app: &mut App) {
     let Some(pm) = app.package_managers.get(app.active_pm_index) else {
         return;
     };
-    let needs_sudo_hint = matches!(pm.name.as_str(), "apt" | "pacman" | "aur" | "rpm" | "snap");
+    let needs_sudo_hint = matches!(pm.name.as_str(), "apt" | "pacman" | "aur" | "rpm" | "snap")
+        || (pm.name == "pip" && pip_uses_arch_pacman_for_global());
     if !needs_sudo_hint {
+        if app
+            .message
+            .as_deref()
+            .is_some_and(is_privilege_sudo_toast)
+        {
+            app.message = None;
+        }
         return;
     }
-    if app.shown_privilege_hint_for.insert(pm.name.clone()) {
+    // `insert` is false after the first visit to this PM in the session, but we still want the
+    // hint when returning from a non-sudo tab (message was cleared) or when replacing our own toast.
+    let first_visit_this_pm = app.shown_privilege_hint_for.insert(pm.name.clone());
+    let message_ok_to_replace = app
+        .message
+        .as_deref()
+        .is_none_or(is_privilege_sudo_toast);
+    if first_visit_this_pm || message_ok_to_replace {
         app.message = Some(format!(
             "{} actions may require sudo. Run `sudo -v` in terminal first.",
             pm.name
@@ -1962,7 +2073,10 @@ pub fn run() {
         println!(
             "  UniPack runs package commands non-interactively. For apt/pacman/aur/rpm/snap actions,"
         );
-        println!("  authenticate sudo first in a normal terminal: sudo -v");
+        println!(
+            "  and the pip tab when pacman is present (python-* packages), authenticate sudo first:"
+        );
+        println!("  sudo -v");
         return;
     }
 
@@ -2178,33 +2292,37 @@ pub fn run() {
                             Some("Another package upgrade is already running".to_string());
                         continue;
                     }
-                    let pkg_name = app
+                    let sel = app
                         .filtered_packages()
                         .get(app.selected_package_index)
-                        .map(|(_, p)| p.name.clone());
-                    if let (Some(name), Some(pm)) = (pkg_name, app.active_pm()) {
+                        .copied();
+                    if let (Some((_, p)), Some(pm)) = (sel, app.active_pm()) {
+                        let display = p.name.clone();
+                        let op_arg = pip_pacman_op_arg(&pm, p);
                         app.single_upgrade = Some(SingleUpgradeProgress {
-                            package_name: name.clone(),
+                            package_name: display.clone(),
                             started_at: Instant::now(),
                         });
-                        app.message = Some(format!("Upgrading {name}..."));
+                        app.message = Some(format!("Upgrading {display}..."));
                         let tx = single_upgrade_tx.clone();
                         std::thread::spawn(move || {
-                            let result = pm.upgrade_package(&name);
-                            let _ = tx.send((name, result));
+                            let result = pm.upgrade_package(&op_arg);
+                            let _ = tx.send((display, result));
                         });
                     }
                 }
                 KeyCode::Char('r') if !app.search_mode => {
-                    let pkg_name = app
+                    let sel = app
                         .filtered_packages()
                         .get(app.selected_package_index)
-                        .map(|(_, p)| p.name.clone());
-                    if let (Some(name), Some(pm)) = (pkg_name, app.active_pm()) {
-                        let result = pm.remove_package(&name);
+                        .copied();
+                    if let (Some((_, p)), Some(pm)) = (sel, app.active_pm()) {
+                        let display = p.name.clone();
+                        let op_arg = pip_pacman_op_arg(&pm, p);
+                        let result = pm.remove_package(&op_arg);
                         match result {
                             Ok(_) => {
-                                app.message = Some(format!("Removed {name}"));
+                                app.message = Some(format!("Removed {display}"));
                                 app.load_packages_sync();
                             }
                             Err(e) => {
