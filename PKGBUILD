@@ -4,7 +4,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Unified terminal UI for pip, npm, bun, cargo, brew, apt, pacman, AUR, rpm, flatpak, and snap (git version)"
 arch=('x86_64' 'aarch64')
-url="https://github.com/Firstp1ck/unipack"
+url="https://github.com/firstp1ck/unipack"
 license=('MIT')
 depends=('gcc-libs')
 optdepends=(
@@ -32,7 +32,7 @@ sha256sums=()
 fetch_source() {
   cd "$srcdir" || exit 1
   if [ ! -d unipack ]; then
-    git clone --filter=blob:none --sparse https://github.com/Firstp1ck/unipack.git unipack
+    git clone --filter=blob:none --sparse https://github.com/firstp1ck/unipack.git unipack
   fi
   cd unipack || exit 1
   git pull --tags origin main 2>/dev/null || true

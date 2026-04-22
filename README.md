@@ -49,7 +49,7 @@ UniPack lets you browse, search, install, remove, and upgrade packages across **
 ### From source
 
 ```bash
-git clone https://github.com/Firstp1ck/unipack
+git clone https://github.com/firstp1ck/unipack
 cd unipack
 cargo build --release
 sudo cp target/release/unipack /usr/local/bin/
@@ -60,7 +60,7 @@ sudo cp target/release/unipack /usr/local/bin/
 This repository includes [`PKGBUILD`](PKGBUILD) for building and installing with Arch’s `makepkg`. It produces the `unipack-git` package (provides `unipack`) and pulls the latest sources during the build.
 
 ```bash
-git clone https://github.com/Firstp1ck/unipack
+git clone https://github.com/firstp1ck/unipack
 cd unipack
 makepkg -si
 ```
