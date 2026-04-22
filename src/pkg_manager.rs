@@ -191,7 +191,16 @@ impl PackageManager {
                     &format!("{} install --upgrade {}", self.command, name),
                 ])
                 .output()?,
-            "npm" | "bun" => Command::new("sh")
+            "npm" if name == "npm" => Command::new("sh")
+                .args(["-c", &format!("{} install -g npm@latest", self.command)])
+                .output()?,
+            "npm" => Command::new("sh")
+                .args(["-c", &format!("{} update -g {}", self.command, name)])
+                .output()?,
+            "bun" if name == "bun" => Command::new("sh")
+                .args(["-c", &format!("{} upgrade", self.command)])
+                .output()?,
+            "bun" => Command::new("sh")
                 .args(["-c", &format!("{} update -g {}", self.command, name)])
                 .output()?,
             "cargo" => Command::new("sh")
@@ -389,7 +398,7 @@ impl PackageManager {
             if parts.len() == 2 {
                 result.push(Package {
                     name: parts[0].trim().to_string(),
-                    version: parts[1].trim().to_string(),
+                    version: parts[1].trim().trim_end_matches(':').to_string(),
                     latest_version: None,
                     status: PackageStatus::Installed,
                     size: 0,
@@ -459,7 +468,7 @@ impl PackageManager {
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split(' ').collect();
             if parts.len() >= 3 {
-                let status = if parts[2].contains("installed") {
+                let status = if line.contains(" installed") {
                     PackageStatus::Installed
                 } else {
                     PackageStatus::Available

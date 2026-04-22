@@ -7,6 +7,7 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use std::process::Command;
+use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -15,7 +16,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Cell, Paragraph, Row, Table, Tabs};
+use ratatui::widgets::{Block, BorderType, Cell, Gauge, Paragraph, Row, Table, Tabs};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use unicode_width::UnicodeWidthStr;
@@ -65,6 +66,11 @@ type UpgradeMapReceiver = std::sync::mpsc::Receiver<UpgradeMapChannelMsg>;
 type PreloadChannelMsg = (u64, usize, AppResult<Vec<Package>>);
 type PreloadSender = std::sync::mpsc::Sender<PreloadChannelMsg>;
 type PreloadReceiver = std::sync::mpsc::Receiver<PreloadChannelMsg>;
+type SingleUpgradeChannelMsg = (String, AppResult<String>);
+type SingleUpgradeSender = std::sync::mpsc::Sender<SingleUpgradeChannelMsg>;
+type SingleUpgradeReceiver = std::sync::mpsc::Receiver<SingleUpgradeChannelMsg>;
+type MultiUpgradeSender = std::sync::mpsc::Sender<MultiUpgradeProgressEvent>;
+type MultiUpgradeReceiver = std::sync::mpsc::Receiver<MultiUpgradeProgressEvent>;
 
 /// Row filter for the package table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -168,6 +174,36 @@ pub struct AllUpgradablesOverlay {
     pub selected: BTreeSet<usize>,
 }
 
+/// UI state for one package upgrade triggered via `u`.
+pub struct SingleUpgradeProgress {
+    /// Package currently being upgraded.
+    pub package_name: String,
+    /// Wall-clock start for indeterminate progress animation.
+    pub started_at: Instant,
+}
+
+/// Running state for bulk upgrade execution from the all-upgradables overlay.
+pub struct MultiUpgradeProgress {
+    /// Number of selected rows scheduled for upgrade.
+    pub total: usize,
+    /// Completed attempts (success + failure).
+    pub done: usize,
+    /// Package currently being upgraded.
+    pub current_package: Option<String>,
+    /// Start instant for currently running package step.
+    pub current_started_at: Option<Instant>,
+}
+
+enum MultiUpgradeProgressEvent {
+    StepStart { package_name: String },
+    StepDone {
+        pm_index: usize,
+        package_name: String,
+        result: AppResult<String>,
+    },
+    Finished,
+}
+
 /// Mutable TUI application state: backends, list contents, selection, and search.
 #[allow(clippy::struct_excessive_bools)]
 pub struct App {
@@ -203,6 +239,10 @@ pub struct App {
     pub pm_pending_updates: Vec<Option<usize>>,
     /// Full-system upgradable list overlay (opened with `a`).
     pub all_upgradables: Option<AllUpgradablesOverlay>,
+    /// In-flight progress for a multi-package overlay upgrade (`a` then `u`).
+    pub multi_upgrade: Option<MultiUpgradeProgress>,
+    /// In-flight single-package upgrade requested via `u`.
+    pub single_upgrade: Option<SingleUpgradeProgress>,
     /// Id of an in-flight background installed-package list (`None` if cancelled).
     pending_list_load_req: Option<u64>,
     /// Monotonic id for background list requests (used to drop stale thread results).
@@ -262,6 +302,8 @@ impl App {
             terminal_size: (80, 24),
             pm_pending_updates,
             all_upgradables: None,
+            multi_upgrade: None,
+            single_upgrade: None,
             pending_list_load_req: None,
             list_load_counter: 0,
             upgrade_map_tx: None,
@@ -792,7 +834,7 @@ fn render_app(frame: &mut Frame, app: &App) {
     render_header(frame, app, chunks[0]);
     if let Some(ref overlay) = app.all_upgradables {
         render_all_upgradables_body(frame, overlay, chunks[1]);
-        render_all_upgradables_footer(frame, overlay, chunks[2]);
+        render_all_upgradables_footer(frame, app, chunks[2]);
     } else {
         render_body(frame, app, chunks[1]);
         render_footer(frame, app, chunks[2]);
@@ -988,7 +1030,10 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
                 Constraint::Percentage(33),
             ])
             .split(hint_rows[1]);
-        let c0 = Text::from(vec![footer_col_line([footer_key("Esc")], " leave search ")]);
+        let c0 = Text::from(vec![
+            footer_col_line([footer_key("Enter")], " keep filter "),
+            footer_col_line([footer_key("Esc")], " clear search "),
+        ]);
         let c1 = Text::from(vec![footer_col_line([footer_key("type")], " filter name ")]);
         let c2 = Text::from(vec![footer_col_line([footer_key("Bksp")], " delete char ")]);
         f.render_widget(Paragraph::new(c0).alignment(Alignment::Left), cols[0]);
@@ -1045,38 +1090,42 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(col_sys).alignment(Alignment::Left), cols[3]);
     }
 
-    let status = app
-        .filtered_packages()
-        .get(app.selected_package_index)
-        .map_or_else(
-            || "— none —".to_string(),
-            |(_, pkg)| {
-                pkg.latest_version.as_ref().map_or_else(
-                    || format!("{} {} · {}", pkg.name, pkg.version, pkg.status),
-                    |latest| format!("{} {} → {} · {}", pkg.name, pkg.version, latest, pkg.status),
-                )
-            },
-        );
-
-    let status_fit = clip_display_width(&status, status_area.width);
-    let status_text = Paragraph::new(status_fit)
-        .style(Style::default().fg(COLORS.accent))
-        .alignment(Alignment::Right);
-
-    f.render_widget(status_text, status_area);
-}
-
-fn refresh_all_upgradables_overlay_rows(app: &mut App) {
-    let Some(overlay) = app.all_upgradables.as_mut() else {
-        return;
-    };
-    overlay.rows =
-        collect_upgradables_from_cached_lists(&app.package_managers, &app.per_pm_packages);
-    overlay.loading = false;
-    if overlay.rows.is_empty() {
-        overlay.cursor = 0;
+    if let Some(progress) = app.single_upgrade.as_ref() {
+        let elapsed_ms = progress.started_at.elapsed().as_millis() as u64;
+        let cycle_ms = 1_800_u64;
+        let half_cycle = cycle_ms / 2;
+        let phase = elapsed_ms % cycle_ms;
+        let ramp = if phase <= half_cycle {
+            phase
+        } else {
+            cycle_ms - phase
+        };
+        let animated = 20_u16 + ((ramp * 75_u64) / half_cycle.max(1)) as u16;
+        let gauge = Gauge::default()
+            .gauge_style(Style::default().fg(COLORS.accent).bg(COLORS.surface))
+            .label(format!("Upgrading {}...", progress.package_name))
+            .percent(animated);
+        f.render_widget(gauge, status_area);
     } else {
-        overlay.cursor = overlay.cursor.min(overlay.rows.len() - 1);
+        let status = app
+            .filtered_packages()
+            .get(app.selected_package_index)
+            .map_or_else(
+                || "— none —".to_string(),
+                |(_, pkg)| {
+                    pkg.latest_version.as_ref().map_or_else(
+                        || format!("{} {} · {}", pkg.name, pkg.version, pkg.status),
+                        |latest| format!("{} {} → {} · {}", pkg.name, pkg.version, latest, pkg.status),
+                    )
+                },
+            );
+
+        let status_fit = clip_display_width(&status, status_area.width);
+        let status_text = Paragraph::new(status_fit)
+            .style(Style::default().fg(COLORS.accent))
+            .alignment(Alignment::Right);
+
+        f.render_widget(status_text, status_area);
     }
 }
 
@@ -1143,7 +1192,11 @@ fn render_all_upgradables_body(f: &mut Frame, overlay: &AllUpgradablesOverlay, a
     f.render_widget(table, area);
 }
 
-fn render_all_upgradables_footer(f: &mut Frame, overlay: &AllUpgradablesOverlay, area: Rect) {
+fn render_all_upgradables_footer(f: &mut Frame, app: &App, area: Rect) {
+    let overlay = app
+        .all_upgradables
+        .as_ref()
+        .expect("overlay footer only rendered while overlay exists");
     let n_sel = overlay.selected.len();
     let step = LIST_SCROLL_STEP;
     let rows = Layout::default()
@@ -1191,25 +1244,49 @@ fn render_all_upgradables_footer(f: &mut Frame, overlay: &AllUpgradablesOverlay,
     f.render_widget(Paragraph::new(col_sel).alignment(Alignment::Left), cols[1]);
     f.render_widget(Paragraph::new(col_act).alignment(Alignment::Left), cols[2]);
 
-    let count_line = Paragraph::new(format!("{n_sel} selected"))
-        .style(Style::default().fg(COLORS.accent))
-        .alignment(Alignment::Right);
-    f.render_widget(count_line, rows[1]);
+    if let Some(progress) = app.multi_upgrade.as_ref() {
+        let pct = if progress.total == 0 {
+            0
+        } else {
+            // Smooth progress within each package step:
+            // done packages count fully, current one contributes up to 95%.
+            let elapsed_ms = progress
+                .current_started_at
+                .as_ref()
+                .map_or(0_u128, |t| t.elapsed().as_millis());
+            let sub_progress_per_mille = ((elapsed_ms * 1000) / 7000).min(950) as usize;
+            let units_per_mille = progress.done.saturating_mul(1000) + sub_progress_per_mille;
+            ((units_per_mille.saturating_mul(100)) / (progress.total.saturating_mul(1000))) as u16
+        };
+        let label = progress.current_package.as_ref().map_or_else(
+            || format!("{}/{} complete", progress.done, progress.total),
+            |pkg| format!("{}/{} · updating {}", progress.done, progress.total, pkg),
+        );
+        let gauge = Gauge::default()
+            .gauge_style(Style::default().fg(COLORS.accent).bg(COLORS.surface))
+            .label(label)
+            .percent(pct);
+        f.render_widget(gauge, rows[1]);
+    } else {
+        let count_line = Paragraph::new(format!("{n_sel} selected"))
+            .style(Style::default().fg(COLORS.accent))
+            .alignment(Alignment::Right);
+        f.render_widget(count_line, rows[1]);
+    }
 }
 
 fn upgrade_all_upgradables_selection(
     app: &mut App,
-    update_tx: &std::sync::mpsc::Sender<(usize, Option<usize>)>,
+    multi_upgrade_tx: &MultiUpgradeSender,
 ) {
     let Some(overlay) = app.all_upgradables.as_mut() else {
         return;
     };
-    if overlay.loading || overlay.selected.is_empty() {
+    if overlay.loading || overlay.selected.is_empty() || app.multi_upgrade.is_some() {
         return;
     }
     let indices: Vec<usize> = overlay.selected.iter().copied().collect();
-    let mut ok_count = 0usize;
-    let mut errors: Vec<String> = Vec::new();
+    let mut tasks: Vec<(usize, PackageManager, String)> = Vec::with_capacity(indices.len());
     for idx in indices {
         let Some(row) = overlay.rows.get(idx) else {
             continue;
@@ -1217,32 +1294,34 @@ fn upgrade_all_upgradables_selection(
         let Some(pm) = app.package_managers.get(row.pm_index) else {
             continue;
         };
-        let name = row.name.clone();
-        match pm.upgrade_package(&name) {
-            Ok(_) => {
-                ok_count += 1;
-            }
-            Err(e) => errors.push(format!("{name}: {e}")),
-        }
+        tasks.push((row.pm_index, pm.clone(), row.name.clone()));
+    }
+    if tasks.is_empty() {
+        return;
     }
     overlay.selected.clear();
-    app.message = if !errors.is_empty() && ok_count == 0 {
-        Some(format!("Upgrade failed: {}", errors.join("; ")))
-    } else if errors.is_empty() {
-        Some(format!("Upgraded {ok_count} package(s)"))
-    } else {
-        Some(format!(
-            "Upgraded {ok_count} package(s); {} error(s): {}",
-            errors.len(),
-            errors.join("; ")
-        ))
-    };
-    app.load_packages_sync();
-    for slot in &mut app.pm_pending_updates {
-        *slot = None;
-    }
-    spawn_update_refresh(&app.package_managers, update_tx);
-    refresh_all_upgradables_overlay_rows(app);
+    app.multi_upgrade = Some(MultiUpgradeProgress {
+        total: tasks.len(),
+        done: 0,
+        current_package: None,
+        current_started_at: None,
+    });
+    app.message = Some(format!("Starting upgrade of {} package(s)...", tasks.len()));
+    let tx = multi_upgrade_tx.clone();
+    std::thread::spawn(move || {
+        for (pm_index, pm, name) in tasks {
+            let _ = tx.send(MultiUpgradeProgressEvent::StepStart {
+                package_name: name.clone(),
+            });
+            let result = pm.upgrade_package(&name);
+            let _ = tx.send(MultiUpgradeProgressEvent::StepDone {
+                pm_index,
+                package_name: name,
+                result,
+            });
+        }
+        let _ = tx.send(MultiUpgradeProgressEvent::Finished);
+    });
 }
 
 fn overlay_select_all_rows(app: &mut App) {
@@ -1312,7 +1391,7 @@ fn handle_all_upgradables_key(
     app: &mut App,
     code: KeyCode,
     modifiers: KeyModifiers,
-    update_tx: &std::sync::mpsc::Sender<(usize, Option<usize>)>,
+    multi_upgrade_tx: &MultiUpgradeSender,
 ) {
     match code {
         KeyCode::Esc | KeyCode::Char('q') => {
@@ -1372,7 +1451,7 @@ fn handle_all_upgradables_key(
             if !modifiers.contains(KeyModifiers::SHIFT)
                 && !modifiers.contains(KeyModifiers::CONTROL) =>
         {
-            upgrade_all_upgradables_selection(app, update_tx);
+            upgrade_all_upgradables_selection(app, multi_upgrade_tx);
         }
         _ => {}
     }
@@ -1710,6 +1789,10 @@ pub fn run() {
     app.upgrade_map_tx = Some(upgrade_tx);
 
     let (pkg_tx, pkg_rx) = std::sync::mpsc::channel::<(usize, u64, AppResult<Vec<Package>>)>();
+    let (single_upgrade_tx, single_upgrade_rx): (SingleUpgradeSender, SingleUpgradeReceiver) =
+        std::sync::mpsc::channel();
+    let (multi_upgrade_tx, multi_upgrade_rx): (MultiUpgradeSender, MultiUpgradeReceiver) =
+        std::sync::mpsc::channel();
 
     let (preload_tx, preload_rx) = std::sync::mpsc::channel::<PreloadChannelMsg>();
     app.preload_result_tx = Some(preload_tx);
@@ -1731,11 +1814,95 @@ pub fn run() {
     spawn_update_refresh(&app.package_managers, &update_tx);
 
     let mut should_quit = false;
+    let mut multi_upgrade_ok = 0usize;
+    let mut multi_upgrade_errors: Vec<String> = Vec::new();
+    let mut multi_upgrade_successes: Vec<(usize, String)> = Vec::new();
 
     while !should_quit {
         while let Ok((idx, count)) = update_rx.try_recv() {
             if let Some(slot) = app.pm_pending_updates.get_mut(idx) {
                 *slot = count;
+            }
+        }
+        while let Ok((name, result)) = single_upgrade_rx.try_recv() {
+            app.single_upgrade = None;
+            match result {
+                Ok(_) => {
+                    app.message = Some(format!("Upgraded {name}"));
+                    app.load_packages_sync();
+                    for slot in &mut app.pm_pending_updates {
+                        *slot = None;
+                    }
+                    spawn_update_refresh(&app.package_managers, &update_tx);
+                }
+                Err(e) => {
+                    app.message = Some(format!("Error: {e}"));
+                }
+            }
+        }
+        while let Ok(event) = multi_upgrade_rx.try_recv() {
+            match event {
+                MultiUpgradeProgressEvent::StepStart { package_name } => {
+                    if let Some(progress) = app.multi_upgrade.as_mut() {
+                        progress.current_package = Some(package_name.clone());
+                        progress.current_started_at = Some(Instant::now());
+                    }
+                    app.message = Some(format!("Upgrading {package_name}..."));
+                }
+                MultiUpgradeProgressEvent::StepDone {
+                    pm_index,
+                    package_name,
+                    result,
+                } => {
+                    if let Some(progress) = app.multi_upgrade.as_mut() {
+                        progress.done = progress.done.saturating_add(1);
+                        progress.current_started_at = None;
+                    }
+                    match result {
+                        Ok(_) => {
+                            multi_upgrade_ok = multi_upgrade_ok.saturating_add(1);
+                            multi_upgrade_successes.push((pm_index, package_name));
+                        }
+                        Err(e) => {
+                            multi_upgrade_errors.push(format!("{package_name}: {e}"));
+                        }
+                    }
+                }
+                MultiUpgradeProgressEvent::Finished => {
+                    app.multi_upgrade = None;
+                    app.message = if !multi_upgrade_errors.is_empty() && multi_upgrade_ok == 0 {
+                        Some(format!("Upgrade failed: {}", multi_upgrade_errors.join("; ")))
+                    } else if multi_upgrade_errors.is_empty() {
+                        Some(format!("Upgraded {multi_upgrade_ok} package(s)"))
+                    } else {
+                        Some(format!(
+                            "Upgraded {multi_upgrade_ok} package(s); {} error(s): {}",
+                            multi_upgrade_errors.len(),
+                            multi_upgrade_errors.join("; ")
+                        ))
+                    };
+                    multi_upgrade_ok = 0;
+                    multi_upgrade_errors.clear();
+                    app.load_packages_sync();
+                    for slot in &mut app.pm_pending_updates {
+                        *slot = None;
+                    }
+                    spawn_update_refresh(&app.package_managers, &update_tx);
+                    if let Some(overlay) = app.all_upgradables.as_mut() {
+                        overlay.rows.retain(|row| {
+                            !multi_upgrade_successes
+                                .iter()
+                                .any(|(pm_idx, name)| row.pm_index == *pm_idx && row.name == *name)
+                        });
+                        overlay.selected.clear();
+                        if overlay.rows.is_empty() {
+                            overlay.cursor = 0;
+                        } else {
+                            overlay.cursor = overlay.cursor.min(overlay.rows.len() - 1);
+                        }
+                    }
+                    multi_upgrade_successes.clear();
+                }
             }
         }
         try_recv_package_list_results(&mut app, &pkg_rx);
@@ -1755,14 +1922,33 @@ pub fn run() {
             })) = crossterm::event::read()
         {
             if app.all_upgradables.is_some() {
-                handle_all_upgradables_key(&mut app, code, modifiers, &update_tx);
+                handle_all_upgradables_key(&mut app, code, modifiers, &multi_upgrade_tx);
+                continue;
+            }
+
+            if app.search_mode {
+                match code {
+                    KeyCode::Esc => {
+                        app.search_mode = false;
+                        app.search_query.clear();
+                    }
+                    KeyCode::Enter => {
+                        app.search_mode = false;
+                    }
+                    KeyCode::Backspace => {
+                        app.search_query.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.search_query.push(c);
+                    }
+                    _ => {}
+                }
                 continue;
             }
 
             match code {
                 KeyCode::Esc => {
-                    if app.search_mode {
-                        app.search_mode = false;
+                    if !app.search_query.is_empty() {
                         app.search_query.clear();
                     } else {
                         should_quit = true;
@@ -1789,31 +1975,34 @@ pub fn run() {
                 KeyCode::Char('\x15') => {
                     app.up(LIST_SCROLL_STEP);
                 }
-                KeyCode::Char('/') => {
-                    app.search_mode = !app.search_mode;
-                    if !app.search_mode {
-                        app.search_query.clear();
-                    }
+                KeyCode::Char('/') if !app.search_mode => {
+                    app.search_mode = true;
                 }
-                KeyCode::Char('u') if !modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('u')
+                    if !app.search_mode && !modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    if app.single_upgrade.is_some() {
+                        app.message = Some("Another package upgrade is already running".to_string());
+                        continue;
+                    }
                     let pkg_name = app
                         .filtered_packages()
                         .get(app.selected_package_index)
                         .map(|(_, p)| p.name.clone());
                     if let (Some(name), Some(pm)) = (pkg_name, app.active_pm()) {
-                        let result = pm.upgrade_package(&name);
-                        match result {
-                            Ok(_) => {
-                                app.message = Some(format!("Upgraded {name}"));
-                                app.load_packages_sync();
-                            }
-                            Err(e) => {
-                                app.message = Some(format!("Error: {e}"));
-                            }
-                        }
+                        app.single_upgrade = Some(SingleUpgradeProgress {
+                            package_name: name.clone(),
+                            started_at: Instant::now(),
+                        });
+                        app.message = Some(format!("Upgrading {name}..."));
+                        let tx = single_upgrade_tx.clone();
+                        std::thread::spawn(move || {
+                            let result = pm.upgrade_package(&name);
+                            let _ = tx.send((name, result));
+                        });
                     }
                 }
-                KeyCode::Char('r') => {
+                KeyCode::Char('r') if !app.search_mode => {
                     let pkg_name = app
                         .filtered_packages()
                         .get(app.selected_package_index)
@@ -1831,7 +2020,7 @@ pub fn run() {
                         }
                     }
                 }
-                KeyCode::Char('i') if !app.search_query.is_empty() => {
+                KeyCode::Char('i') if !app.search_mode && !app.search_query.is_empty() => {
                     let name = app.search_query.clone();
                     if let Some(pm) = app.active_pm() {
                         let result = pm.install_package(&name);
@@ -1882,19 +2071,6 @@ pub fn run() {
                     cycle_active_pm(&mut app, false);
                 }
                 KeyCode::Tab => cycle_active_pm(&mut app, true),
-                KeyCode::Backspace => {
-                    app.search_query.pop();
-                }
-                KeyCode::Char(c)
-                    if app.search_mode
-                        && (c.is_alphanumeric()
-                            || c == '-'
-                            || c == '_'
-                            || c == '.'
-                            || c == '*') =>
-                {
-                    app.search_query.push(c);
-                }
                 _ => {}
             }
         }
