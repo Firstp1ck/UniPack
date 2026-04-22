@@ -27,6 +27,10 @@ install() {
     platform=$(detect_platform)
     local arch
     arch=$(detect_arch)
+
+    if [ "$platform" = "darwin" ] && [ "$arch" = "x86_64" ]; then
+        die "darwin-x86_64 binaries are no longer published. Use an Apple Silicon Mac (darwin-arm64) or build from source."
+    fi
     
     local filename="unipack-${platform}-${arch}"
     local url="https://github.com/${REPO}/releases/download/${VERSION}/${filename}"
