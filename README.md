@@ -2,7 +2,7 @@
 
 > A unified TUI for keeping every package manager up to date.
 
-![UniPack main TUI](images/Mainpage_v0.1.0.png)
+![UniPack main TUI](images/Mainpage_v0.1.1.png)
 
 ![Rust](https://img.shields.io/badge/built_with-Rust-orange?style=flat-square&logo=rust)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
