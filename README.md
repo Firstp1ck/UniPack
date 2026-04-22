@@ -24,7 +24,8 @@ When **`pacman`** is available (Arch and other pacman-based distros), global Pyt
 - **`a`** — see updates from **all** managers at once (Space toggles a row, **`u`** upgrades what you selected, **`a`** / **`d`** select all or none, **Shift+letter** quickly toggles rows for managers whose name starts with that letter)
 - **Distro name** in the header on Linux
 - **TokyoNight**-style colors
-- **Eleven sources**: pip, npm, bun, cargo, brew, apt, pacman, AUR (yay or paru), rpm, flatpak, snap
+- **Eleven sources**: pip, npm, bun, cargo, brew, apt, pacman, AUR (**yay** and/or **paru** — either is enough), rpm, flatpak, snap
+- **Optional sudo before the TUI** — on an interactive terminal, when a backend that needs elevation is present, UniPack can ask to run `sudo -v` up front so later upgrades are not blocked waiting for a password (you can decline and run `sudo -v` yourself instead)
 
 ---
 
@@ -39,7 +40,7 @@ When **`pacman`** is available (Arch and other pacman-based distros), global Pyt
 | `brew`    | macOS / Linux  | Homebrew                      |
 | `apt`     | Debian/Ubuntu  | Installed packages            |
 | `pacman`  | Arch Linux     | Official repos                |
-| `aur`     | Arch Linux     | AUR via yay or paru           |
+| `aur`     | Arch Linux     | AUR when **yay** or **paru** is on `PATH` (either alone registers the tab) |
 | `rpm`     | Fedora/RHEL    |                               |
 | `flatpak` | Linux          | Flathub apps                  |
 | `snap`    | Linux          |                               |
@@ -73,13 +74,13 @@ You need the **base-devel** group (for `makepkg`) and network access so the PKGB
 
 - **Rust** — current **stable** toolchain (install or update via [rustup](https://rustup.rs))
 - Any of the package managers above that you want UniPack to control
-- For managers that require root (notably `apt`, `pacman`, `aur`, `rpm`, `snap`), authenticate sudo first:
+- **Sudo for privileged backends** — UniPack runs upgrades/removes non-interactively, so a live sudo session avoids password prompts mid-action. On a normal terminal, when something like `apt`, `pacman`, `aur`, `rpm`, or `snap` is detected (and for the **pip** tab when `pacman` is present), startup may offer **`sudo -v`** before the TUI appears (`[y/N]`; declining is fine). You can also authenticate whenever you like:
 
 ```bash
 sudo -v
 ```
 
-UniPack runs package actions non-interactively, so this avoids password-prompt stalls during upgrade/remove.
+If you accept the startup prompt and `sudo -v` fails, UniPack exits with a non-zero status so scripts notice the failure.
 
 ---
 
@@ -105,10 +106,10 @@ UniPack runs package actions non-interactively, so this avoids password-prompt s
 ## 🛠 Usage
 
 ```bash
-# Launch UniPack
+# Launch UniPack (optional sudo warm-up prompt may appear first)
 unipack
 
-# Show help (stdout, no TUI)
+# Show help (stdout, no TUI; includes the privilege note)
 unipack --help
 unipack -h
 ```
