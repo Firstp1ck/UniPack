@@ -118,9 +118,6 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - runner: macos-13
-            platform: darwin
-            arch: x86_64
           - runner: macos-14
             platform: darwin
             arch: arm64
@@ -181,12 +178,10 @@ jobs:
           cd release-files
           test -f unipack-linux-x86_64
           test -f unipack-linux-arm64
-          test -f unipack-darwin-x86_64
           test -f unipack-darwin-arm64
           sha256sum \
             unipack-linux-x86_64 \
             unipack-linux-arm64 \
-            unipack-darwin-x86_64 \
             unipack-darwin-arm64 > SHA256SUMS
           echo "SHA256SUMS:"
           cat SHA256SUMS
@@ -215,7 +210,6 @@ jobs:
           files: |
             release-files/unipack-linux-x86_64
             release-files/unipack-linux-arm64
-            release-files/unipack-darwin-x86_64
             release-files/unipack-darwin-arm64
             release-files/SHA256SUMS
           draft: false
