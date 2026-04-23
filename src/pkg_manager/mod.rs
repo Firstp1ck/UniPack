@@ -77,6 +77,11 @@ impl PackageManager {
         commands::upgrade_package(self, name)
     }
 
+    /// Refreshes package databases/mirrors when supported, then retries upgrade for `name`.
+    pub fn refresh_mirrors_and_upgrade_package(&self, name: &str) -> AppResult<String> {
+        commands::refresh_mirrors_and_upgrade_package(self, name)
+    }
+
     /// Returns how many packages this backend reports as updatable (best-effort; `0` on failure).
     pub fn count_pending_updates(&self) -> AppResult<usize> {
         counts::count_pending_updates(self)

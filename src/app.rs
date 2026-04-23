@@ -12,6 +12,16 @@ use crate::package_cache;
 use crate::pkg_manager::PackageManager;
 use crate::workers::merge_installed_list_for_pm;
 
+/// Pending confirmation to refresh pacman mirrors and retry a failed upgrade.
+pub struct PendingMirrorRetry {
+    /// Package manager snapshot used for the retry thread.
+    pub pm: PackageManager,
+    /// Human-facing package label shown in UI toasts.
+    pub package_display: String,
+    /// Exact operation argument used for package-manager command execution.
+    pub package_op_arg: String,
+}
+
 /// Mutable TUI application state: backends, list contents, selection, and search.
 #[allow(clippy::struct_excessive_bools)]
 pub struct App {
@@ -51,6 +61,8 @@ pub struct App {
     pub multi_upgrade: Option<MultiUpgradeProgress>,
     /// In-flight single-package upgrade requested via `u`.
     pub single_upgrade: Option<SingleUpgradeProgress>,
+    /// Waiting for `y/n` confirmation to refresh mirrors and retry a failed upgrade.
+    pub pending_mirror_retry: Option<PendingMirrorRetry>,
     /// Id of an in-flight background installed-package list (`None` if cancelled).
     pub pending_list_load_req: Option<u64>,
     /// Monotonic id for background list requests (used to drop stale thread results).
@@ -117,6 +129,7 @@ impl App {
             all_upgradables: None,
             multi_upgrade: None,
             single_upgrade: None,
+            pending_mirror_retry: None,
             pending_list_load_req: None,
             list_load_counter: 0,
             upgrade_map_tx: None,

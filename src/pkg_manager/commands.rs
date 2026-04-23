@@ -22,6 +22,29 @@ pub(super) fn remove_package(pm: &PackageManager, name: &str) -> AppResult<Strin
 /// Runs the backend-specific upgrade/update command for `name`.
 pub(super) fn upgrade_package(pm: &PackageManager, name: &str) -> AppResult<String> {
     ensure_privileges_ready(pm.name.as_str())?;
+    let output = dispatch_upgrade(pm, name)?;
+    finalize_output(&output, "upgraded", name)
+}
+
+/// Refreshes pacman package databases where relevant, then retries package upgrade.
+pub(super) fn refresh_mirrors_and_upgrade_package(
+    pm: &PackageManager,
+    name: &str,
+) -> AppResult<String> {
+    ensure_privileges_ready(pm.name.as_str())?;
+    let uses_pacman_db = matches!(pm.name.as_str(), "pacman" | "aur")
+        || (pm.name == "pip" && pip_uses_arch_pacman_for_global());
+    if !uses_pacman_db {
+        return upgrade_package(pm, name);
+    }
+
+    let refresh = sudo_args(&["pacman", "-Syy", "--noconfirm"])?;
+    if !refresh.status.success() {
+        return Err(AppError::from(
+            String::from_utf8_lossy(&refresh.stderr).to_string(),
+        ));
+    }
+
     if pm.name == "apt" {
         return upgrade_apt(pm.command.as_str(), name);
     }
@@ -93,7 +116,7 @@ fn dispatch_upgrade(pm: &PackageManager, name: &str) -> AppResult<Output> {
     match pm.name.as_str() {
         "cargo" => run_args(cmd, &["install", name]),
         "brew" => run_args(cmd, &["upgrade", name]),
-        "pacman" => sudo_args(&[cmd, "-S", name]),
+        "pacman" => sudo_args(&[cmd, "-S", "--needed", "--noconfirm", name]),
         "aur" => run_args(cmd, &["-S", "--needed", "--noconfirm", name]),
         "rpm" => sudo_args(&[cmd, "-Uvh", name]),
         "flatpak" => run_args(cmd, &["update", name]),

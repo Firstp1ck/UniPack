@@ -8,7 +8,7 @@ use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 
 use crate::all_upgradables::collect_upgradables_from_cached_lists;
-use crate::app::App;
+use crate::app::{App, PendingMirrorRetry};
 use crate::detect::{offer_sudo_warm_before_tui, pip_pacman_op_arg};
 use crate::model::{
     AllUpgradablesOverlay, LIST_SCROLL_STEP, MultiUpgradeProgressEvent, MultiUpgradeReceiver,
@@ -250,10 +250,48 @@ fn drain_single_upgrade(app: &mut App, rx: &SingleUpgradeReceiver, update_tx: &U
                 spawn_update_refresh(&app.package_managers, update_tx);
             }
             Err(e) => {
+                let err_text = e.to_string();
+                if should_offer_mirror_retry(&err_text) {
+                    maybe_prepare_mirror_retry(app, &name);
+                    continue;
+                }
                 app.message = Some(format!("Error: {e}"));
             }
         }
     }
+}
+
+/// Detects the localized pacman/yay "already current -- reinstalling" warning.
+fn should_offer_mirror_retry(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("ist aktuell") && lower.contains("reinstall")
+}
+
+/// Stores retry context and asks for `y/n` confirmation in the info strip.
+fn maybe_prepare_mirror_retry(app: &mut App, display_name: &str) {
+    let Some((_, p)) = app
+        .filtered_packages()
+        .get(app.selected_package_index)
+        .copied()
+    else {
+        app.message = Some(
+            "Update appears out-of-sync. Refresh mirrors manually, then retry upgrade.".to_string(),
+        );
+        return;
+    };
+    let Some(pm) = app.active_pm() else {
+        app.message = Some("Update appears out-of-sync. Retry after selecting a package.".to_string());
+        return;
+    };
+    let op_arg = pip_pacman_op_arg(&pm, p);
+    app.pending_mirror_retry = Some(PendingMirrorRetry {
+        pm,
+        package_display: display_name.to_string(),
+        package_op_arg: op_arg,
+    });
+    app.message = Some(
+        "Package is reported as current. Refresh mirrors and retry upgrade? [y/N]".to_string(),
+    );
 }
 
 /// Handles start / done / finished events for an in-progress bulk overlay upgrade.
@@ -377,6 +415,10 @@ fn poll_and_handle_input(app: &mut App, channels: &RunChannels) -> bool {
         return false;
     };
 
+    if app.pending_mirror_retry.is_some() {
+        return handle_pending_mirror_retry_key(app, code, &channels.single_upgrade_tx);
+    }
+
     if app.all_upgradables.is_some() {
         handle_all_upgradables_key(app, code, modifiers, &channels.multi_upgrade_tx);
         return false;
@@ -388,6 +430,44 @@ fn poll_and_handle_input(app: &mut App, channels: &RunChannels) -> bool {
     }
 
     handle_main_key(app, code, modifiers, channels)
+}
+
+/// Handles `y/n` decision for mirror refresh + retry prompt. Returns quit flag.
+fn handle_pending_mirror_retry_key(
+    app: &mut App,
+    code: KeyCode,
+    single_upgrade_tx: &SingleUpgradeSender,
+) -> bool {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            let Some(pending) = app.pending_mirror_retry.take() else {
+                return false;
+            };
+            app.single_upgrade = Some(SingleUpgradeProgress {
+                package_name: pending.package_display.clone(),
+                started_at: Instant::now(),
+            });
+            app.message = Some(format!(
+                "Refreshing mirrors and retrying {}...",
+                pending.package_display
+            ));
+            let tx = single_upgrade_tx.clone();
+            std::thread::spawn(move || {
+                let result = pending
+                    .pm
+                    .refresh_mirrors_and_upgrade_package(&pending.package_op_arg);
+                let _ = tx.send((pending.package_display, result));
+            });
+            false
+        }
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+            app.pending_mirror_retry = None;
+            app.message = Some("Mirror refresh canceled.".to_string());
+            false
+        }
+        KeyCode::Char('q') => true,
+        _ => false,
+    }
 }
 
 /// Handles a key press while the main search-mode banner is active.
