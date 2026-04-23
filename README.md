@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=flat-square)
 
-UniPack lets you browse, search, upgrade, and remove packages across **pip, npm, bun, cargo, apt, pacman, AUR, rpm, flatpak, snap, and brew** — all from one terminal UI. It is focused on **keeping your system up to date**, not bootstrapping new installs: use your package manager of choice for first-time installs, then let UniPack handle the ongoing updates. It **remembers your package lists between runs** so reopening feels quicker, and it **shows when updates are available** where the underlying tools support it.
+UniPack lets you browse, search, upgrade, and remove packages across **pip, npm, pnpm, bun, cargo, apt, pacman, AUR, rpm, flatpak, snap, and brew** — all from one terminal UI. It is focused on **keeping your system up to date**, not bootstrapping new installs: use your package manager of choice for first-time installs, then let UniPack handle the ongoing updates. It **remembers your package lists between runs** so reopening feels quicker, and it **shows when updates are available** where the underlying tools support it.
 
 When **`pacman`** is available (Arch and other pacman-based distros), global Python libraries belong in **`python-*`** packages (official repos and often the **AUR** under the same naming). UniPack’s **pip** tab then lists those `python-*` installs, runs upgrades/removes through **`sudo pacman`** when no AUR helper is present, and through **`yay`** or **`paru`** (whichever is installed) when you have one, so behaviour matches distro conventions instead of `pip install --user` / breaking system Python.
 
@@ -24,7 +24,7 @@ When **`pacman`** is available (Arch and other pacman-based distros), global Pyt
 - **`a`** — see updates from **all** managers at once (Space toggles a row, **`u`** upgrades what you selected, **`a`** / **`d`** select all or none, **Shift+letter** quickly toggles rows for managers whose name starts with that letter)
 - **Distro name** in the header on Linux
 - **TokyoNight**-style colors
-- **Eleven sources**: pip, npm, bun, cargo, brew, apt, pacman, AUR (**yay** and/or **paru** — either is enough), rpm, flatpak, snap
+- **Twelve sources**: pip, npm, pnpm, bun, cargo, brew, apt, pacman, AUR (**yay** and/or **paru** — either is enough), rpm, flatpak, snap
 - **Optional sudo before the TUI** — on an interactive terminal, when a backend that needs elevation is present, UniPack can ask to run `sudo -v` up front so later upgrades are not blocked waiting for a password (you can decline and run `sudo -v` yourself instead)
 
 ---
@@ -35,6 +35,7 @@ When **`pacman`** is available (Arch and other pacman-based distros), global Pyt
 |-----------|----------------|-------------------------------|
 | `pip`     | Linux / macOS  | Elsewhere: `pip3` / PyPI. **If `pacman` exists:** installed **`python-*`** packages (repo + AUR); the list shows the **suffix after `python-`**; upgrades use **yay/paru** if available, otherwise **`sudo pacman`** |
 | `npm`     | Linux / macOS  | Global packages               |
+| `pnpm`    | Linux / macOS  | Global packages               |
 | `bun`     | Linux / macOS  | Global packages               |
 | `cargo`   | Linux / macOS  | Installed crates              |
 | `brew`    | macOS / Linux  | Homebrew                      |
