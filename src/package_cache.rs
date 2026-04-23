@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AppError, AppResult, Package, PackageManager};
+use crate::model::{AppError, AppResult, Package};
+use crate::pkg_manager::PackageManager;
 
 const CACHE_SCHEMA: u32 = 2;
 const CACHE_SUBDIR: &str = "unipack";

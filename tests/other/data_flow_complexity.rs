@@ -1,4 +1,4 @@
-//! Data-flow complexity report for UniPack (Dunsmore-style approximation).
+//! Data-flow complexity report for `UniPack` (Dunsmore-style approximation).
 //!
 //! This integration test tracks variable definitions and uses to estimate
 //! data-flow complexity, then prints report sections used by
@@ -252,7 +252,10 @@ fn test_data_flow_complexity() {
     let total_uses: u32 = functions.iter().map(|f| f.uses).sum();
 
     println!("\n=== Data Flow Complexity Report (Dunsmore) ===");
-    println!("Total files analyzed: {}", rust_files_under(Path::new("src")).len());
+    println!(
+        "Total files analyzed: {}",
+        rust_files_under(Path::new("src")).len()
+    );
     println!("Total functions/methods: {}", functions.len());
     println!("Total project complexity: {total_complexity}");
     println!("Total variable definitions: {total_defs}");

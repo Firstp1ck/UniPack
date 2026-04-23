@@ -1,4 +1,4 @@
-//! Cyclomatic complexity report for UniPack.
+//! Cyclomatic complexity report for `UniPack`.
 //!
 //! This integration test parses Rust source files and prints a complexity
 //! ranking that can be consumed by `dev/scripts/complexity_report.sh`.
@@ -177,7 +177,10 @@ fn test_cyclomatic_complexity() {
     let total_complexity: u32 = functions.iter().map(|f| f.complexity).sum();
 
     println!("\n=== Cyclomatic Complexity Report ===");
-    println!("Total files analyzed: {}", rust_files_under(Path::new("src")).len());
+    println!(
+        "Total files analyzed: {}",
+        rust_files_under(Path::new("src")).len()
+    );
     println!("Total functions/methods: {}", functions.len());
     println!("Total project complexity: {total_complexity}");
     #[allow(clippy::cast_precision_loss)]
