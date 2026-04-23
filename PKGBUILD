@@ -1,6 +1,6 @@
 # Maintainer: Firstpick firstpick1992@proton.me
 pkgname=unipack-git
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="Unified terminal UI for pip, npm, bun, cargo, brew, apt, pacman, AUR, rpm, flatpak, and snap (git version)"
 arch=('x86_64' 'aarch64')
