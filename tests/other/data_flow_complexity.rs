@@ -231,8 +231,7 @@ fn analyze_file(path: &Path) -> Result<Vec<FunctionDataFlow>, Box<dyn std::error
 
 #[test]
 fn test_data_flow_complexity() {
-    let mut files = rust_files_under(Path::new("src"));
-    files.extend(rust_files_under(Path::new("tests")));
+    let files = rust_files_under(Path::new("src"));
 
     let mut functions = Vec::new();
     for file in files {

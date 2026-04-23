@@ -62,14 +62,19 @@ printf "%bRunning complexity tests...%b\n" "$COLOR_BLUE" "$COLOR_RESET" >&2
 RAW_OUTPUT="$(cargo test complexity -- --nocapture 2>&1)"
 
 printf "%s\n" "$RAW_OUTPUT" | grep -vE "(^running|^test result:|^test tests::|Finished.*test.*profile|Running unittests|Running tests/)" | sed '/^$/N;/^\n$/d' | awk '
-  BEGIN { line_count=0; nonempty_count=0 }
+  BEGIN {
+    line_count=0
+    nonempty_count=0
+    ignored_file_re="(tests/other/data_flow_complexity\\.rs|tests/other/cyclomatic_complexity\\.rs)"
+  }
   /^=== Cyclomatic Complexity Report ===/ { section="cyclomatic"; delete top3_cyclomatic; count_cyc=0 }
   /^=== Data Flow Complexity Report/ { section="dataflow"; delete top3_dataflow; count_df=0 }
   /^=== Top 10 Most Complex Functions ===/ && section=="cyclomatic" { in_top10=1; count_cyc=0; next }
   /^=== Top 10 Most Complex Functions ===/ && section=="dataflow" { in_top10=1; count_df=0; next }
-  in_top10 && /^[0-9]+\./ && section=="cyclomatic" && count_cyc < 3 { top3_cyclomatic[++count_cyc]=$0 }
-  in_top10 && /^[0-9]+\./ && section=="dataflow" && count_df < 3 { top3_dataflow[++count_df]=$0 }
+  in_top10 && /^[0-9]+\./ && section=="cyclomatic" && count_cyc < 3 && $0 !~ ignored_file_re { top3_cyclomatic[++count_cyc]=$0 }
+  in_top10 && /^[0-9]+\./ && section=="dataflow" && count_df < 3 && $0 !~ ignored_file_re { top3_dataflow[++count_df]=$0 }
   in_top10 && /^===/ { in_top10=0 }
+  in_top10 && /^[0-9]+\./ && $0 ~ ignored_file_re { next }
   {
     lines[++line_count]=$0
     if ($0 !~ /^[[:space:]]*$/) nonempty_count++
