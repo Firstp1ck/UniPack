@@ -24,6 +24,14 @@ For install options, supported package managers, and the key reference, see [REA
 
 ---
 
+# UniPack v0.1.4
+
+## Highlights
+
+- **Fuzzy search mode in both package views.** While search is active, press `Ctrl+f` to toggle normal substring matching and fuzzy subsequence matching in the main list and the all-upgradables overlay.
+- **Backend-aware bulk upgrade behavior.** In the all-upgradables view, UniPack now distinguishes package-level upgrades from backend-native full-system updates, then executes the safest matching strategy for each selected backend.
+- **Safer system update actions.** Full-system updates now use a verified support policy and explicit confirmation flow so unsupported or stale selections are handled more predictably.
+
 ## [0.1.3] - 2026-04-23
 
 # UniPack v0.1.3
