@@ -8,13 +8,13 @@ use ratatui::widgets::{Block, BorderType, Cell, Gauge, Paragraph, Row, Table, Ta
 
 use crate::app::App;
 use crate::model::{LIST_SCROLL_STEP, Package, PackageStatus};
-use crate::pkg_manager::pip_uses_arch_pacman_for_global;
+use crate::pkg_manager::{full_system_command_spec, pip_uses_arch_pacman_for_global};
 use crate::workers::privilege_hint_needs_sudo_reminder;
 
 use super::progress::single_upgrade_percent;
 use super::scroll::compute_scroll;
 use super::text::{clip_display_width, footer_col_line, highlight_ascii_matches};
-use super::theme::{COLORS, footer_hint, footer_key};
+use super::theme::{COLORS, footer_key};
 use super::version_diff::version_cell_line;
 
 /// Body text shown beneath the info strip when the pip tab lists pacman python packages.
@@ -404,9 +404,16 @@ fn render_keybinding_footer(f: &mut Frame, app: &App, area: Rect) {
         cols[2],
     );
     f.render_widget(
-        Paragraph::new(col_sys_keys()).alignment(Alignment::Left),
+        Paragraph::new(col_sys_keys(system_update_available(app))).alignment(Alignment::Left),
         cols[3],
     );
+}
+
+/// Returns whether the active tab supports backend-native full-system update.
+fn system_update_available(app: &App) -> bool {
+    app.package_managers
+        .get(app.active_pm_index)
+        .is_some_and(|pm| full_system_command_spec(pm).is_some())
 }
 
 /// Movement-related footer column.
@@ -416,10 +423,8 @@ fn col_move_keys() -> Text<'static> {
         footer_col_line([footer_key("↑↓"), footer_key(" j k")], " move (wrap) "),
         Line::from(vec![
             footer_key("Ctrl+d"),
-            footer_hint(" "),
-            footer_key("Ctrl+u"),
             Span::styled(
-                format!(" page ±{step} "),
+                format!(" page +{step} "),
                 Style::default().fg(COLORS.secondary),
             ),
         ]),
@@ -446,9 +451,14 @@ fn col_pkg_keys() -> Text<'static> {
 }
 
 /// System-action footer column (refresh, quit).
-fn col_sys_keys() -> Text<'static> {
-    Text::from(vec![
-        footer_col_line([footer_key("r")], " refresh "),
-        footer_col_line([footer_key("q"), footer_key(" Esc")], " quit "),
-    ])
+fn col_sys_keys(system_update_available: bool) -> Text<'static> {
+    let mut lines = vec![footer_col_line([footer_key("r")], " refresh ")];
+    if system_update_available {
+        lines.push(footer_col_line([footer_key("Ctrl+u")], " system update "));
+    }
+    lines.push(footer_col_line(
+        [footer_key("q"), footer_key(" Esc")],
+        " quit ",
+    ));
+    Text::from(lines)
 }

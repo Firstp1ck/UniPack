@@ -22,6 +22,18 @@ pub struct PendingMirrorRetry {
     pub package_op_arg: String,
 }
 
+/// Pending confirmation to run backend-native full-system update for the active PM tab.
+pub struct PendingSystemUpgrade {
+    /// Package manager snapshot used by the worker thread.
+    pub pm: PackageManager,
+    /// Human-readable command preview presented in the confirmation prompt.
+    pub command_preview: String,
+    /// Number of currently known outdated rows in the active PM cache.
+    pub outdated_count: usize,
+    /// Small sample of package names shown in the confirmation prompt.
+    pub outdated_sample: Vec<String>,
+}
+
 /// Mutable TUI application state: backends, list contents, selection, and search.
 #[allow(clippy::struct_excessive_bools)]
 pub struct App {
@@ -65,6 +77,8 @@ pub struct App {
     pub single_upgrade: Option<SingleUpgradeProgress>,
     /// Waiting for `y/n` confirmation to refresh mirrors and retry a failed upgrade.
     pub pending_mirror_retry: Option<PendingMirrorRetry>,
+    /// Waiting for `y/n` confirmation to run full-system update on the active PM.
+    pub pending_system_upgrade: Option<PendingSystemUpgrade>,
     /// Id of an in-flight background installed-package list (`None` if cancelled).
     pub pending_list_load_req: Option<u64>,
     /// Monotonic id for background list requests (used to drop stale thread results).
@@ -133,6 +147,7 @@ impl App {
             multi_upgrade: None,
             single_upgrade: None,
             pending_mirror_retry: None,
+            pending_system_upgrade: None,
             pending_list_load_req: None,
             list_load_counter: 0,
             upgrade_map_tx: None,

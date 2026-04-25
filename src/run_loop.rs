@@ -8,7 +8,7 @@ use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 
 use crate::all_upgradables::collect_upgradables_from_cached_lists;
-use crate::app::{App, PendingMirrorRetry};
+use crate::app::{App, PendingMirrorRetry, PendingSystemUpgrade};
 use crate::detect::{offer_sudo_warm_before_tui, pip_pacman_op_arg};
 use crate::model::{
     AllUpgradablesOverlay, LIST_SCROLL_STEP, MultiUpgradeProgressEvent, MultiUpgradeReceiver,
@@ -17,6 +17,7 @@ use crate::model::{
     UpdateCountSender, UpgradeMapChannelMsg, UpgradeMapReceiver,
 };
 use crate::overlay::{handle_all_upgradables_key, refresh_overlay_opened_metadata};
+use crate::pkg_manager::full_system_command_spec;
 use crate::ui::render_app;
 use crate::workers::{
     advance_upgrade_merge_chunk, cycle_active_pm, maybe_show_privilege_hint, pump_preloads,
@@ -140,9 +141,7 @@ fn print_help() {
     println!();
     println!("Keyboard Shortcuts:");
     println!("  ↑/↓ or j/k    Navigate package list (wraps)");
-    println!(
-        "  Ctrl+d / Ctrl+u    Move cursor down/up by {LIST_SCROLL_STEP} lines (clamped to list ends)"
-    );
+    println!("  Ctrl+d        Move cursor down by {LIST_SCROLL_STEP} lines (clamped to list ends)");
     println!("  /             Toggle search mode");
     println!("  Ctrl+f        Toggle normal/fuzzy search (while searching)");
     println!("  a             All upgradable packages (from cached lists; visit tabs to fill)");
@@ -150,6 +149,7 @@ fn print_help() {
         "                In that view: Space toggle, a all, d none, Shift+PM letter toggles that PM, u upgrade (full-update where eligible), Ctrl+d/u page, Esc/q close"
     );
     println!("  u             Upgrade selected package");
+    println!("  Ctrl+u        Full-system update on active package manager (with confirmation)");
     println!("  Delete        Remove selected package");
     println!("  Tab           Switch package manager (forward)");
     println!("  Shift+Tab     Switch package manager (backward)");
@@ -443,6 +443,9 @@ fn poll_and_handle_input(app: &mut App, channels: &RunChannels) -> bool {
     if app.pending_mirror_retry.is_some() {
         return handle_pending_mirror_retry_key(app, code, &channels.single_upgrade_tx);
     }
+    if app.pending_system_upgrade.is_some() {
+        return handle_pending_system_upgrade_key(app, code, &channels.single_upgrade_tx);
+    }
 
     if app.all_upgradables.is_some() {
         handle_all_upgradables_key(app, code, modifiers, &channels.multi_upgrade_tx);
@@ -563,14 +566,6 @@ fn handle_main_navigation_key(
             app.down(LIST_SCROLL_STEP);
             Some(false)
         }
-        KeyCode::Char('u' | 'U') if modifiers.contains(KeyModifiers::CONTROL) => {
-            app.up(LIST_SCROLL_STEP);
-            Some(false)
-        }
-        KeyCode::Char('\x15') => {
-            app.up(LIST_SCROLL_STEP);
-            Some(false)
-        }
         KeyCode::Char('/') if !app.search_mode => {
             app.search_mode = true;
             Some(false)
@@ -589,6 +584,12 @@ fn handle_main_action_key(
     match code {
         KeyCode::Char('u') if !app.search_mode && !modifiers.contains(KeyModifiers::CONTROL) => {
             start_single_upgrade(app, &channels.single_upgrade_tx);
+            true
+        }
+        KeyCode::Char('u' | 'U')
+            if !app.search_mode && modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            prepare_system_upgrade_confirmation(app);
             true
         }
         KeyCode::Delete if !app.search_mode => {
@@ -623,6 +624,48 @@ fn handle_main_action_key(
     }
 }
 
+/// Stores full-system update confirmation context for the active PM and prompts for `y/n`.
+fn prepare_system_upgrade_confirmation(app: &mut App) {
+    if app.single_upgrade.is_some() || app.multi_upgrade.is_some() {
+        app.message = Some("Another upgrade is already running".to_string());
+        return;
+    }
+    let Some(pm) = app.active_pm() else {
+        return;
+    };
+    let Some(spec) = full_system_command_spec(&pm) else {
+        app.message = Some(format!(
+            "{} does not support full-system update in UniPack",
+            pm.name
+        ));
+        return;
+    };
+
+    let outdated_names: Vec<String> = app
+        .active_packages()
+        .iter()
+        .filter(|pkg| pkg.latest_version.is_some())
+        .map(|pkg| pkg.name.clone())
+        .collect();
+    let outdated_count = outdated_names.len();
+    let detail = if outdated_count == 0 {
+        "no outdated packages currently detected".to_string()
+    } else {
+        format!("{outdated_count} outdated")
+    };
+
+    app.pending_system_upgrade = Some(PendingSystemUpgrade {
+        pm,
+        command_preview: spec.command_preview.clone(),
+        outdated_count,
+        outdated_sample: outdated_names.into_iter().take(5).collect(),
+    });
+    app.message = Some(format!(
+        "Run full-system update for {} via `{}` ({detail})? [y/N]",
+        spec.backend, spec.command_preview
+    ));
+}
+
 /// Spawns a worker to upgrade the currently selected package, if any.
 fn start_single_upgrade(app: &mut App, single_upgrade_tx: &SingleUpgradeSender) {
     if app.single_upgrade.is_some() {
@@ -651,6 +694,54 @@ fn start_single_upgrade(app: &mut App, single_upgrade_tx: &SingleUpgradeSender) 
         let result = pm.upgrade_package(&op_arg);
         let _ = tx.send((display, result));
     });
+}
+
+/// Handles `y/n` decision for full-system update prompt. Returns quit flag.
+fn handle_pending_system_upgrade_key(
+    app: &mut App,
+    code: KeyCode,
+    single_upgrade_tx: &SingleUpgradeSender,
+) -> bool {
+    match code {
+        KeyCode::Char('y' | 'Y') => {
+            let Some(pending) = app.pending_system_upgrade.take() else {
+                return false;
+            };
+            let display = format!("{} (system update)", pending.pm.name);
+            let detail = if pending.outdated_count == 0 {
+                "no outdated packages detected".to_string()
+            } else {
+                let preview = pending.outdated_sample.join(", ");
+                let suffix = if pending.outdated_count > pending.outdated_sample.len() {
+                    ", ..."
+                } else {
+                    ""
+                };
+                format!("{} outdated ({preview}{suffix})", pending.outdated_count)
+            };
+            app.single_upgrade = Some(SingleUpgradeProgress {
+                package_name: display.clone(),
+                started_at: Instant::now(),
+            });
+            app.message = Some(format!(
+                "Running {} via `{}` ({detail})...",
+                display, pending.command_preview
+            ));
+            let tx = single_upgrade_tx.clone();
+            std::thread::spawn(move || {
+                let result = pending.pm.upgrade_system();
+                let _ = tx.send((display, result));
+            });
+            false
+        }
+        KeyCode::Esc | KeyCode::Char('n' | 'N') => {
+            app.pending_system_upgrade = None;
+            app.message = Some("System update canceled.".to_string());
+            false
+        }
+        KeyCode::Char('q') => true,
+        _ => false,
+    }
 }
 
 /// Synchronously removes the selected package and surfaces the result as a toast.
