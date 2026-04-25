@@ -1030,15 +1030,15 @@ EOF
 
   release_date="$(date +%Y-%m-%d)"
   tmp_file="$(mktemp)"
-  existing_version_line="$(awk -v v="${new_ver}" '/^##\s*\[/{if ($0 ~ "\\[" v "\\]"){print NR; exit}}' "${changelog_file}")"
+  existing_version_line="$(awk -v v="${new_ver}" '/^##[[:space:]]*\[/{if ($0 ~ "\\[" v "\\]"){print NR; exit}}' "${changelog_file}")"
 
   if [[ -n "${existing_version_line}" ]]; then
     log_info "Version ${new_ver} already exists, replacing in place..."
     version_start="${existing_version_line}"
     version_end="$(awk -v s="${version_start}" '
       NR<=s {next}
-      /^---$/ && NR>(s+2) {print NR; exit}
-      /^##\s*\[/ {print NR; exit}
+      /^---[[:space:]]*$/ && NR>(s+2) {print NR; exit}
+      /^##[[:space:]]*\[/ {print NR; exit}
       END {if (NR>0) print NR+1}
     ' "${changelog_file}")"
 
@@ -1057,7 +1057,7 @@ EOF
     awk -v start="${version_end}" 'NR>=start' "${changelog_file}" >> "${tmp_file}"
   else
     log_info "Version ${new_ver} not found, adding to the top..."
-    first_version_line="$(awk '/^##\s*\[.*\]/{print NR; exit}' "${changelog_file}")"
+    first_version_line="$(awk '/^##[[:space:]]*\[.*\]/{print NR; exit}' "${changelog_file}")"
 
     if [[ -n "${first_version_line}" && "${first_version_line}" -gt 1 ]]; then
       awk -v end="$((first_version_line - 1))" 'NR<=end' "${changelog_file}" > "${tmp_file}"
