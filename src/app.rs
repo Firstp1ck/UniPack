@@ -37,6 +37,8 @@ pub struct App {
     pub search_query: String,
     /// When true, typed keys append to `search_query` instead of triggering actions.
     pub search_mode: bool,
+    /// When true, search uses fuzzy subsequence matching instead of plain substring matching.
+    pub search_fuzzy: bool,
     /// Status filter for the table.
     pub filter_mode: FilterMode,
     /// Active sort column.
@@ -117,6 +119,7 @@ impl App {
             selected_package_index: 0,
             search_query: String::new(),
             search_mode: false,
+            search_fuzzy: false,
             filter_mode: FilterMode::All,
             sort_field: SortField::Name,
             sort_ascending: true,
@@ -302,18 +305,19 @@ impl App {
     /// Applies search, filter, and sort settings; returns `(source_index, package)` pairs.
     #[must_use]
     pub fn filtered_packages(&self) -> Vec<(usize, &Package)> {
+        let query = if self.search_query.is_empty() {
+            None
+        } else {
+            Some(self.search_query.to_lowercase())
+        };
         let mut filtered: Vec<_> = self
             .active_packages()
             .iter()
             .enumerate()
             .filter(|(_, p)| {
-                let matches_search = if self.search_query.is_empty() {
-                    true
-                } else {
-                    let query = self.search_query.to_lowercase();
-                    p.name.to_lowercase().contains(&query)
-                        || p.description.to_lowercase().contains(&query)
-                };
+                let matches_search = query
+                    .as_deref()
+                    .is_none_or(|needle| package_matches_search(p, needle, self.search_fuzzy));
 
                 let matches_filter = match self.filter_mode {
                     FilterMode::All => true,
@@ -403,4 +407,41 @@ impl App {
             self.selected_package_index = (self.selected_package_index + amt).min(count - 1);
         }
     }
+}
+
+/// Matches a package against one normalized search query.
+fn package_matches_search(package: &Package, query: &str, fuzzy: bool) -> bool {
+    search_match(package.name.as_str(), query, fuzzy)
+        || search_match(package.description.as_str(), query, fuzzy)
+}
+
+/// Returns whether one field matches `query` in normal or fuzzy mode.
+fn search_match(field: &str, query: &str, fuzzy: bool) -> bool {
+    let lowered = field.to_lowercase();
+    if fuzzy {
+        fuzzy_subsequence_match(lowered.as_str(), query)
+    } else {
+        lowered.contains(query)
+    }
+}
+
+/// Returns true when all `needle` chars appear in `haystack` order (not necessarily contiguously).
+fn fuzzy_subsequence_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut needle_chars = needle.chars();
+    let Some(mut current) = needle_chars.next() else {
+        return true;
+    };
+    for h in haystack.chars() {
+        if h == current {
+            if let Some(next) = needle_chars.next() {
+                current = next;
+            } else {
+                return true;
+            }
+        }
+    }
+    false
 }

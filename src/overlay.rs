@@ -115,21 +115,60 @@ pub fn overlay_scroll_page(app: &mut App, down: bool) {
 
 /// Returns the rows visible under the current overlay search query.
 pub fn overlay_filtered_rows(overlay: &AllUpgradablesOverlay) -> Vec<(usize, &UpgradableRow)> {
+    let query = if overlay.search_query.is_empty() {
+        None
+    } else {
+        Some(overlay.search_query.to_lowercase())
+    };
     overlay
         .rows
         .iter()
         .enumerate()
         .filter(|(_, row)| {
-            if overlay.search_query.is_empty() {
-                return true;
-            }
-            let query = overlay.search_query.to_lowercase();
-            row.name.to_lowercase().contains(&query)
-                || row.pm_name.to_lowercase().contains(&query)
-                || row.old_version.to_lowercase().contains(&query)
-                || row.new_version.to_lowercase().contains(&query)
+            query
+                .as_deref()
+                .is_none_or(|needle| overlay_row_matches_search(row, needle, overlay.search_fuzzy))
         })
         .collect()
+}
+
+/// Returns whether one overlay row matches the current query.
+fn overlay_row_matches_search(row: &UpgradableRow, query: &str, fuzzy: bool) -> bool {
+    overlay_search_match(row.name.as_str(), query, fuzzy)
+        || overlay_search_match(row.pm_name.as_str(), query, fuzzy)
+        || overlay_search_match(row.old_version.as_str(), query, fuzzy)
+        || overlay_search_match(row.new_version.as_str(), query, fuzzy)
+}
+
+/// Returns whether one overlay field matches `query` in normal or fuzzy mode.
+fn overlay_search_match(field: &str, query: &str, fuzzy: bool) -> bool {
+    let lowered = field.to_lowercase();
+    if fuzzy {
+        overlay_fuzzy_subsequence_match(lowered.as_str(), query)
+    } else {
+        lowered.contains(query)
+    }
+}
+
+/// Returns true when each `needle` character appears in order within `haystack`.
+fn overlay_fuzzy_subsequence_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut needle_chars = needle.chars();
+    let Some(mut current) = needle_chars.next() else {
+        return true;
+    };
+    for h in haystack.chars() {
+        if h == current {
+            if let Some(next) = needle_chars.next() {
+                current = next;
+            } else {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Clamps the cursor to the last visible row after the filter changes.
@@ -187,7 +226,7 @@ pub fn handle_all_upgradables_key(
         .as_ref()
         .is_some_and(|overlay| overlay.search_mode)
     {
-        handle_overlay_search_key(app, code);
+        handle_overlay_search_key(app, code, modifiers);
         return;
     }
 
@@ -198,7 +237,7 @@ pub fn handle_all_upgradables_key(
 }
 
 /// Handles key presses while the overlay search is active. Falls back to no-op for unknowns.
-fn handle_overlay_search_key(app: &mut App, code: KeyCode) {
+fn handle_overlay_search_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     let Some(overlay) = app.all_upgradables.as_mut() else {
         return;
     };
@@ -214,6 +253,10 @@ fn handle_overlay_search_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Backspace => {
             overlay.search_query.pop();
+            overlay_clamp_cursor(overlay);
+        }
+        KeyCode::Char('f' | 'F') if modifiers.contains(KeyModifiers::CONTROL) => {
+            overlay.search_fuzzy = !overlay.search_fuzzy;
             overlay_clamp_cursor(overlay);
         }
         KeyCode::Char(c) => {

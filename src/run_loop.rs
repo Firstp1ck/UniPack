@@ -143,6 +143,7 @@ fn print_help() {
         "  Ctrl+d / Ctrl+u    Move cursor down/up by {LIST_SCROLL_STEP} lines (clamped to list ends)"
     );
     println!("  /             Toggle search mode");
+    println!("  Ctrl+f        Toggle normal/fuzzy search (while searching)");
     println!("  a             All upgradable packages (from cached lists; visit tabs to fill)");
     println!(
         "                In that view: Space toggle, a all, d none, Shift+PM letter toggles that PM, u upgrade, Ctrl+d/u page, Esc/q close"
@@ -426,7 +427,7 @@ fn poll_and_handle_input(app: &mut App, channels: &RunChannels) -> bool {
     }
 
     if app.search_mode {
-        handle_search_key(app, code);
+        handle_search_key(app, code, modifiers);
         return false;
     }
 
@@ -472,7 +473,7 @@ fn handle_pending_mirror_retry_key(
 }
 
 /// Handles a key press while the main search-mode banner is active.
-fn handle_search_key(app: &mut App, code: KeyCode) {
+fn handle_search_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     match code {
         KeyCode::Esc => {
             app.search_mode = false;
@@ -483,6 +484,9 @@ fn handle_search_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Backspace => {
             app.search_query.pop();
+        }
+        KeyCode::Char('f' | 'F') if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.search_fuzzy = !app.search_fuzzy;
         }
         KeyCode::Char(c) => {
             app.search_query.push(c);
@@ -672,6 +676,7 @@ fn open_all_upgradables_overlay(app: &mut App) {
         selected: BTreeSet::new(),
         search_query: String::new(),
         search_mode: false,
+        search_fuzzy: false,
     });
 }
 

@@ -164,6 +164,8 @@ pub struct AllUpgradablesOverlay {
     pub search_query: String,
     /// When true, typed keys append to `search_query` instead of triggering actions.
     pub search_mode: bool,
+    /// When true, the query uses fuzzy subsequence matching instead of plain substring matching.
+    pub search_fuzzy: bool,
 }
 
 /// UI state for one package upgrade triggered via `u`.
