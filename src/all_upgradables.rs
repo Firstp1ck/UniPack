@@ -8,7 +8,7 @@ use crate::{Package, PackageStatus};
 /// One upgradable row for the bulk-update overlay.
 ///
 /// **What:** Binds a package name and version transition to a backend index/label.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpgradableRow {
     /// Index into the app-level [`crate::App::package_managers`] slice.
     pub pm_index: usize,

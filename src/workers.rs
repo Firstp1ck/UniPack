@@ -242,6 +242,25 @@ pub fn merge_installed_list_for_pm(app: &mut App, pm_index: usize, fresh: Vec<Pa
     }
 }
 
+/// Counts rows marked as outdated in one cached package list.
+fn cached_outdated_count(pkgs: &[Package]) -> usize {
+    pkgs.iter()
+        .filter(|p| p.status == crate::model::PackageStatus::Outdated)
+        .count()
+}
+
+/// Updates one PM tab badge from the currently cached list (if present).
+fn sync_pending_count_from_cached_list(app: &mut App, pm_index: usize) {
+    let count = app
+        .per_pm_packages
+        .get(pm_index)
+        .and_then(|slot| slot.as_ref())
+        .map(|pkgs| cached_outdated_count(pkgs));
+    if let Some(slot) = app.pm_pending_updates.get_mut(pm_index) {
+        *slot = count;
+    }
+}
+
 /// Drains background list-load results into per-tab caches.
 pub fn try_recv_package_list_results(app: &mut App, pkg_rx: &PackageListReceiver) {
     while let Ok((idx, rid, res)) = pkg_rx.try_recv() {
@@ -261,8 +280,13 @@ fn apply_package_list_result(app: &mut App, idx: usize, res: AppResult<Vec<Packa
         Ok(pkgs) => {
             let updated = merge_installed_list_for_pm(app, idx, pkgs);
             if updated {
+                if let Some(slot) = app.pm_pending_updates.get_mut(idx) {
+                    *slot = None;
+                }
                 app.schedule_upgrade_metadata_fetch(idx);
                 app.persist_package_disk_cache_best_effort();
+            } else {
+                sync_pending_count_from_cached_list(app, idx);
             }
             if idx == app.active_pm_index {
                 clamp_pm_selection(app);
@@ -338,6 +362,7 @@ pub fn advance_upgrade_merge_chunk(app: &mut App) {
     if slot.next_pkg_index < pkgs.len() {
         app.pending_upgrade_merge = Some(slot);
     } else {
+        sync_pending_count_from_cached_list(app, pm_index);
         app.persist_package_disk_cache_best_effort();
         if let Some((pm, map)) = app.upgrade_merge_backlog.pop_front() {
             app.pending_upgrade_merge = Some(PendingUpgradeMerge {

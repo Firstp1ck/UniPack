@@ -16,7 +16,7 @@ use crate::model::{
     SingleUpgradeProgress, SingleUpgradeReceiver, SingleUpgradeSender, UpdateCountReceiver,
     UpdateCountSender, UpgradeMapChannelMsg, UpgradeMapReceiver,
 };
-use crate::overlay::handle_all_upgradables_key;
+use crate::overlay::{handle_all_upgradables_key, refresh_overlay_opened_metadata};
 use crate::ui::render_app;
 use crate::workers::{
     advance_upgrade_merge_chunk, cycle_active_pm, maybe_show_privilege_hint, pump_preloads,
@@ -30,6 +30,7 @@ struct MultiUpgradeAgg {
     ok: usize,
     errors: Vec<String>,
     successes: Vec<(usize, String)>,
+    full_system_successes: BTreeSet<usize>,
 }
 
 /// All MPSC endpoints threaded through the main loop.
@@ -146,13 +147,13 @@ fn print_help() {
     println!("  Ctrl+f        Toggle normal/fuzzy search (while searching)");
     println!("  a             All upgradable packages (from cached lists; visit tabs to fill)");
     println!(
-        "                In that view: Space toggle, a all, d none, Shift+PM letter toggles that PM, u upgrade, Ctrl+d/u page, Esc/q close"
+        "                In that view: Space toggle, a all, d none, Shift+PM letter toggles that PM, u upgrade (full-update where eligible), Ctrl+d/u page, Esc/q close"
     );
     println!("  u             Upgrade selected package");
-    println!("  r             Remove selected package");
+    println!("  Delete        Remove selected package");
     println!("  Tab           Switch package manager (forward)");
     println!("  Shift+Tab     Switch package manager (backward)");
-    println!("  Ctrl+R        Refresh package list");
+    println!("  r             Refresh package list");
     println!("  o             Toggle show only upgradable packages");
     println!("  Esc           Leave search, or quit when not searching");
     println!("  q             Quit when not in search (in search, types into query)");
@@ -306,9 +307,17 @@ fn drain_multi_upgrade(app: &mut App, channels: &RunChannels, agg: &mut MultiUpg
             MultiUpgradeProgressEvent::StepDone {
                 pm_index,
                 package_name,
+                used_full_system_update,
                 result,
             } => {
-                on_multi_upgrade_step_done(app, agg, pm_index, package_name, result);
+                on_multi_upgrade_step_done(
+                    app,
+                    agg,
+                    pm_index,
+                    package_name,
+                    used_full_system_update,
+                    result,
+                );
             }
             MultiUpgradeProgressEvent::Finished => {
                 on_multi_upgrade_finished(app, agg, &channels.update_tx);
@@ -332,6 +341,7 @@ fn on_multi_upgrade_step_done(
     agg: &mut MultiUpgradeAgg,
     pm_index: usize,
     package_name: String,
+    used_full_system_update: bool,
     result: crate::model::AppResult<String>,
 ) {
     if let Some(progress) = app.multi_upgrade.as_mut() {
@@ -341,7 +351,11 @@ fn on_multi_upgrade_step_done(
     match result {
         Ok(_) => {
             agg.ok = agg.ok.saturating_add(1);
-            agg.successes.push((pm_index, package_name));
+            if used_full_system_update {
+                agg.full_system_successes.insert(pm_index);
+            } else {
+                agg.successes.push((pm_index, package_name));
+            }
         }
         Err(e) => {
             agg.errors.push(format!("{package_name}: {e}"));
@@ -362,10 +376,11 @@ fn on_multi_upgrade_finished(
         *slot = None;
     }
     spawn_update_refresh(&app.package_managers, update_tx);
-    prune_overlay_after_bulk_upgrade(app, &agg.successes);
+    prune_overlay_after_bulk_upgrade(app, &agg.successes, &agg.full_system_successes);
     agg.ok = 0;
     agg.errors.clear();
     agg.successes.clear();
+    agg.full_system_successes.clear();
 }
 
 /// Human-readable summary for the "upgrade finished" toast.
@@ -385,11 +400,18 @@ fn multi_upgrade_summary(agg: &MultiUpgradeAgg) -> String {
 }
 
 /// Removes already-upgraded rows from the overlay, keeping the cursor in range.
-fn prune_overlay_after_bulk_upgrade(app: &mut App, successes: &[(usize, String)]) {
+fn prune_overlay_after_bulk_upgrade(
+    app: &mut App,
+    successes: &[(usize, String)],
+    full_system_successes: &BTreeSet<usize>,
+) {
     let Some(overlay) = app.all_upgradables.as_mut() else {
         return;
     };
     overlay.rows.retain(|row| {
+        if full_system_successes.contains(&row.pm_index) {
+            return false;
+        }
         !successes
             .iter()
             .any(|(pm_idx, name)| row.pm_index == *pm_idx && row.name == *name)
@@ -400,6 +422,7 @@ fn prune_overlay_after_bulk_upgrade(app: &mut App, successes: &[(usize, String)]
     } else {
         overlay.cursor = overlay.cursor.min(overlay.rows.len() - 1);
     }
+    refresh_overlay_opened_metadata(overlay);
 }
 
 /// Polls for a keyboard event (100ms timeout) and dispatches it. Returns `true` to quit.
@@ -568,7 +591,7 @@ fn handle_main_action_key(
             start_single_upgrade(app, &channels.single_upgrade_tx);
             true
         }
-        KeyCode::Char('r') if !app.search_mode => {
+        KeyCode::Delete if !app.search_mode => {
             remove_selected_package(app);
             true
         }
@@ -580,7 +603,7 @@ fn handle_main_action_key(
             open_all_upgradables_overlay(app);
             true
         }
-        KeyCode::Char('R') if modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('r') if !app.search_mode && !modifiers.contains(KeyModifiers::CONTROL) => {
             refresh_active_pm(app, &channels.update_tx);
             true
         }
@@ -669,9 +692,16 @@ fn toggle_outdated_only(app: &mut App) {
 /// Opens the all-upgradables overlay from the already-cached per-tab lists.
 fn open_all_upgradables_overlay(app: &mut App) {
     let rows = collect_upgradables_from_cached_lists(&app.package_managers, &app.per_pm_packages);
+    let opened_row_count = rows.len();
+    let mut opened_backend_counts = std::collections::BTreeMap::new();
+    for row in &rows {
+        *opened_backend_counts.entry(row.pm_index).or_insert(0usize) += 1;
+    }
     app.all_upgradables = Some(AllUpgradablesOverlay {
         loading: false,
         rows,
+        opened_row_count,
+        opened_backend_counts,
         cursor: 0,
         selected: BTreeSet::new(),
         search_query: String::new(),

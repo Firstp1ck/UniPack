@@ -3,15 +3,18 @@
 //! Split into small helpers so each key handler stays well below the cognitive-complexity
 //! threshold. The overlay renderer in [`crate::ui`] consumes [`overlay_filtered_rows`].
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::all_upgradables::UpgradableRow;
+use crate::all_upgradables::collect_upgradables_from_cached_lists;
 use crate::app::App;
 use crate::model::{
     AllUpgradablesOverlay, LIST_SCROLL_STEP, MultiUpgradeProgress, MultiUpgradeProgressEvent,
     MultiUpgradeSender,
 };
-use crate::pkg_manager::PackageManager;
+use crate::pkg_manager::{PackageManager, ResolvedUpgradeTask, resolve_upgrade_plan};
 
 /// Launches the bulk-upgrade worker thread for whatever is currently selected.
 pub fn upgrade_all_upgradables_selection(app: &mut App, multi_upgrade_tx: &MultiUpgradeSender) {
@@ -21,7 +24,15 @@ pub fn upgrade_all_upgradables_selection(app: &mut App, multi_upgrade_tx: &Multi
     if overlay.loading || overlay.selected.is_empty() || app.multi_upgrade.is_some() {
         return;
     }
-    let tasks = collect_upgrade_tasks(overlay, &app.package_managers);
+    let current_rows =
+        collect_upgradables_from_cached_lists(&app.package_managers, &app.per_pm_packages);
+    let plan = resolve_upgrade_plan(
+        &overlay.rows,
+        &overlay.selected,
+        &current_rows,
+        &app.package_managers,
+    );
+    let tasks = collect_upgrade_tasks(&plan.tasks, &app.package_managers);
     if tasks.is_empty() {
         return;
     }
@@ -32,51 +43,163 @@ pub fn upgrade_all_upgradables_selection(app: &mut App, multi_upgrade_tx: &Multi
         current_package: None,
         current_started_at: None,
     });
-    app.message = Some(format!("Starting upgrade of {} package(s)...", tasks.len()));
+    app.message = Some(multi_upgrade_start_message(tasks.len(), &plan.notes));
     spawn_multi_upgrade_worker(tasks, multi_upgrade_tx.clone());
 }
 
-/// Extracts `(pm_index, pm, op_arg, display_name)` tuples for the currently selected rows.
+/// Builds worker tasks from resolver output.
 fn collect_upgrade_tasks(
-    overlay: &AllUpgradablesOverlay,
+    resolved_tasks: &[ResolvedUpgradeTask],
     managers: &[PackageManager],
-) -> Vec<(usize, PackageManager, String, String)> {
-    let mut tasks = Vec::with_capacity(overlay.selected.len());
-    for idx in overlay.selected.iter().copied() {
-        let Some(row) = overlay.rows.get(idx) else {
-            continue;
-        };
-        let Some(pm) = managers.get(row.pm_index) else {
-            continue;
-        };
-        let op_arg = row
-            .upgrade_package_name
-            .clone()
-            .unwrap_or_else(|| row.name.clone());
-        tasks.push((row.pm_index, pm.clone(), op_arg, row.name.clone()));
+) -> Vec<WorkerTask> {
+    let mut tasks = Vec::with_capacity(resolved_tasks.len());
+    for task in resolved_tasks {
+        match task {
+            ResolvedUpgradeTask::FullSystemUpdate {
+                pm_index,
+                display_name,
+            } => {
+                let Some(pm) = managers.get(*pm_index) else {
+                    continue;
+                };
+                tasks.push(WorkerTask::FullSystem {
+                    pm_index: *pm_index,
+                    pm: pm.clone(),
+                    display_name: display_name.clone(),
+                });
+            }
+            ResolvedUpgradeTask::PackageLevelUpgrade {
+                pm_index,
+                op_arg,
+                display_name,
+            } => {
+                let Some(pm) = managers.get(*pm_index) else {
+                    continue;
+                };
+                tasks.push(WorkerTask::Package {
+                    pm_index: *pm_index,
+                    pm: pm.clone(),
+                    op_arg: op_arg.clone(),
+                    display_name: display_name.clone(),
+                });
+            }
+        }
     }
     tasks
 }
 
-/// Spawns a single worker thread that upgrades the tasks sequentially and reports events.
-fn spawn_multi_upgrade_worker(
-    tasks: Vec<(usize, PackageManager, String, String)>,
-    tx: MultiUpgradeSender,
-) {
+/// Returns the user-facing start message for one bulk run.
+fn multi_upgrade_start_message(task_count: usize, notes: &[String]) -> String {
+    if notes.is_empty() {
+        return format!("Starting upgrade of {task_count} task(s)...");
+    }
+    format!(
+        "Starting upgrade of {task_count} task(s): {}",
+        notes.join(" | ")
+    )
+}
+
+/// One executable task in the multi-upgrade worker.
+enum WorkerTask {
+    /// One package-level upgrade step.
+    Package {
+        /// Backend index.
+        pm_index: usize,
+        /// Backend handle.
+        pm: PackageManager,
+        /// Package operation argument.
+        op_arg: String,
+        /// Display label for progress UI.
+        display_name: String,
+    },
+    /// One backend full-system update step.
+    FullSystem {
+        /// Backend index.
+        pm_index: usize,
+        /// Backend handle.
+        pm: PackageManager,
+        /// Display label for progress UI.
+        display_name: String,
+    },
+}
+
+/// Spawns a single worker thread that upgrades tasks sequentially and reports progress events.
+fn spawn_multi_upgrade_worker(tasks: Vec<WorkerTask>, tx: MultiUpgradeSender) {
     std::thread::spawn(move || {
-        for (pm_index, pm, op_arg, display_name) in tasks {
+        for task in tasks {
+            let (pm_index, display_name, used_full_system_update, result) = match task {
+                WorkerTask::Package {
+                    pm_index,
+                    pm,
+                    op_arg,
+                    display_name,
+                } => (pm_index, display_name, false, pm.upgrade_package(&op_arg)),
+                WorkerTask::FullSystem {
+                    pm_index,
+                    pm,
+                    display_name,
+                } => (pm_index, display_name, true, pm.upgrade_system()),
+            };
             let _ = tx.send(MultiUpgradeProgressEvent::StepStart {
                 package_name: display_name.clone(),
             });
-            let result = pm.upgrade_package(&op_arg);
             let _ = tx.send(MultiUpgradeProgressEvent::StepDone {
                 pm_index,
                 package_name: display_name,
+                used_full_system_update,
                 result,
             });
         }
         let _ = tx.send(MultiUpgradeProgressEvent::Finished);
     });
+}
+
+/// Returns selected backend indices that currently satisfy full-update selection coverage.
+#[must_use]
+pub fn selected_full_update_candidate_backends(overlay: &AllUpgradablesOverlay) -> BTreeSet<usize> {
+    let mut selected_counts = BTreeMap::new();
+    for idx in overlay.selected.iter().copied() {
+        let Some(row) = overlay.rows.get(idx) else {
+            continue;
+        };
+        *selected_counts.entry(row.pm_index).or_insert(0usize) += 1;
+    }
+    overlay
+        .opened_backend_counts
+        .iter()
+        .filter_map(|(pm_index, total)| {
+            (selected_counts.get(pm_index).copied().unwrap_or(0) == *total && *total > 0)
+                .then_some(*pm_index)
+        })
+        .collect()
+}
+
+/// Refreshes open-time overlay metadata after row mutations.
+pub fn refresh_overlay_opened_metadata(overlay: &mut AllUpgradablesOverlay) {
+    overlay.opened_row_count = overlay.rows.len();
+    overlay.opened_backend_counts.clear();
+    for row in &overlay.rows {
+        *overlay
+            .opened_backend_counts
+            .entry(row.pm_index)
+            .or_insert(0) += 1;
+    }
+}
+
+/// Returns backend names eligible for full-update hints in the current selection.
+#[must_use]
+pub fn full_update_candidate_backend_names(
+    app: &App,
+    overlay: &AllUpgradablesOverlay,
+) -> Vec<String> {
+    selected_full_update_candidate_backends(overlay)
+        .into_iter()
+        .filter_map(|pm_index| {
+            app.package_managers.get(pm_index).and_then(|pm| {
+                crate::pkg_manager::full_system_command_spec(pm).map(|_| pm.name.clone())
+            })
+        })
+        .collect()
 }
 
 /// Selects every row in the overlay (ignoring any active search filter).

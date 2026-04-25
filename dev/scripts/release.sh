@@ -22,7 +22,6 @@
 #   UNIPACK_AUR_GIT_DIR   Directory of the unipack-git AUR git clone (must contain PKGBUILD)
 #   UNIPACK_WIKI_DIR      Wiki git clone (optional; empty default skips wiki push)
 #   UNIPACK_GITHUB_REPO   GitHub slug OWNER/REPO for release asset URLs (see GITHUB_REPO default)
-#   UNIPACK_PUBLISH_CRATES Set to 1 to run cargo publish (skipped by default)
 
 set -euo pipefail
 
@@ -566,23 +565,19 @@ phase4_build_release() {
     log_info "Monitor: https://github.com/${GITHUB_REPO}/actions (workflow: Release)"
   fi
 
-  if [[ "${UNIPACK_PUBLISH_CRATES:-0}" == "1" ]]; then
-    log_step "Verifying crates.io publish (dry-run)"
-    dry_run_cmd cargo publish --dry-run
-    log_success "crates.io publish verification passed"
+  log_step "Verifying crates.io publish (dry-run)"
+  dry_run_cmd cargo publish --dry-run
+  log_success "crates.io publish verification passed"
 
-    log_step "Publishing to crates.io"
-    if [[ "${DRY_RUN}" == true ]]; then
-      log_info "[DRY-RUN] Would run 'cargo publish' to publish to crates.io"
-    else
-      cargo publish || {
-        log_error "Failed to publish to crates.io"
-        confirm_continue "Continue anyway?" || return 1
-      }
-      log_success "Published to crates.io"
-    fi
+  log_step "Publishing to crates.io"
+  if [[ "${DRY_RUN}" == true ]]; then
+    log_info "[DRY-RUN] Would run 'cargo publish' to publish to crates.io"
   else
-    log_info "Skipping crates.io (set UNIPACK_PUBLISH_CRATES=1 to run cargo publish --dry-run and cargo publish)"
+    cargo publish || {
+      log_error "Failed to publish to crates.io"
+      confirm_continue "Continue anyway?" || return 1
+    }
+    log_success "Published to crates.io"
   fi
 }
 

@@ -29,6 +29,22 @@ pub(super) fn upgrade_package(pm: &PackageManager, name: &str) -> AppResult<Stri
     finalize_output(&output, "upgraded", name)
 }
 
+/// Runs the backend-native full-system upgrade command.
+pub(super) fn upgrade_system(pm: &PackageManager) -> AppResult<String> {
+    ensure_privileges_ready(pm.name.as_str())?;
+    let output = dispatch_system_upgrade(pm)?;
+    if output.status.success() {
+        Ok(format!(
+            "Successfully completed system update for {}",
+            pm.name
+        ))
+    } else {
+        Err(AppError::from(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ))
+    }
+}
+
 /// Refreshes pacman package databases where relevant, then retries package upgrade.
 pub(super) fn refresh_mirrors_and_upgrade_package(
     pm: &PackageManager,
@@ -122,6 +138,27 @@ fn dispatch_upgrade(pm: &PackageManager, name: &str) -> AppResult<Output> {
         "flatpak" => run_args(cmd, &["update", name]),
         "snap" => sudo_args(&[cmd, "refresh", name]),
         _ => Err(AppError::from("Unknown package manager")),
+    }
+}
+
+/// Dispatch table for backend-native full-system updates.
+fn dispatch_system_upgrade(pm: &PackageManager) -> AppResult<Output> {
+    let cmd = pm.command.as_str();
+    match pm.name.as_str() {
+        "pacman" => sudo_args(&[cmd, "-Syu"]),
+        "aur" => run_args(cmd, &["-Syu"]),
+        "apt" => {
+            let update = sudo_args(&[cmd, "update"])?;
+            if !update.status.success() {
+                return Ok(update);
+            }
+            sudo_args(&[cmd, "upgrade", "-y"])
+        }
+        "flatpak" => run_args(cmd, &["update", "-y"]),
+        "snap" => sudo_args(&[cmd, "refresh"]),
+        _ => Err(AppError::from(
+            "Full system update is unsupported for this backend",
+        )),
     }
 }
 

@@ -441,14 +441,14 @@ fn col_pkg_keys() -> Text<'static> {
     Text::from(vec![
         footer_col_line([footer_key("a")], " all upgrades "),
         footer_col_line([footer_key("u")], " upgrade "),
-        footer_col_line([footer_key("r")], " remove "),
+        footer_col_line([footer_key("Del")], " remove "),
     ])
 }
 
 /// System-action footer column (refresh, quit).
 fn col_sys_keys() -> Text<'static> {
     Text::from(vec![
-        footer_col_line([footer_key("Ctrl+R")], " refresh "),
+        footer_col_line([footer_key("r")], " refresh "),
         footer_col_line([footer_key("q"), footer_key(" Esc")], " quit "),
     ])
 }

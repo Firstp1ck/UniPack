@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, BorderType, Cell, Gauge, Paragraph, Row, Table};
 
 use crate::app::App;
 use crate::model::{AllUpgradablesOverlay, LIST_SCROLL_STEP};
-use crate::overlay::overlay_filtered_rows;
+use crate::overlay::{full_update_candidate_backend_names, overlay_filtered_rows};
 
 use super::main_view::render_search_banner_and_hints;
 use super::progress::multi_upgrade_percent;
@@ -187,7 +187,10 @@ fn col_overlay_sel() -> Text<'static> {
 fn col_overlay_act() -> Text<'static> {
     Text::from(vec![
         footer_col_line([footer_key("Shift+letter")], " toggle PM "),
-        footer_col_line([footer_key("u")], " upgrade selected "),
+        footer_col_line(
+            [footer_key("u")],
+            " upgrade selected (full-update where eligible) ",
+        ),
         Line::from(""),
     ])
 }
@@ -211,7 +214,17 @@ fn render_overlay_status_row(
             .percent(pct);
         f.render_widget(gauge, area);
     } else {
-        let count_line = Paragraph::new(format!("{} selected", overlay.selected.len()))
+        let full_update_candidates = full_update_candidate_backend_names(app, overlay);
+        let status = if full_update_candidates.is_empty() {
+            format!("{} selected", overlay.selected.len())
+        } else {
+            format!(
+                "{} selected · full-update candidate: {}",
+                overlay.selected.len(),
+                full_update_candidates.join(", ")
+            )
+        };
+        let count_line = Paragraph::new(status)
             .style(Style::default().fg(COLORS.accent))
             .alignment(Alignment::Right);
         f.render_widget(count_line, area);

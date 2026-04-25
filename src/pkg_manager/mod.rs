@@ -13,8 +13,12 @@ mod commands;
 mod counts;
 mod latest;
 mod list;
+mod system_update_policy;
 mod util;
 
+pub use system_update_policy::{
+    ResolvedUpgradeTask, full_system_command_spec, resolve_upgrade_plan,
+};
 pub use util::pip_uses_arch_pacman_for_global;
 
 /// Identifies a backend (pip, apt, pacman, …) and how to invoke it.
@@ -75,6 +79,11 @@ impl PackageManager {
     /// Runs the backend-specific upgrade/update command for `name`.
     pub fn upgrade_package(&self, name: &str) -> AppResult<String> {
         commands::upgrade_package(self, name)
+    }
+
+    /// Runs the backend-native full-system update command when supported.
+    pub fn upgrade_system(&self) -> AppResult<String> {
+        commands::upgrade_system(self)
     }
 
     /// Refreshes package databases/mirrors when supported, then retries upgrade for `name`.

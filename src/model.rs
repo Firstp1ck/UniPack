@@ -1,6 +1,6 @@
 //! Shared data types, channel aliases, and constants used across the crate.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -156,6 +156,10 @@ pub struct AllUpgradablesOverlay {
     pub loading: bool,
     /// Sorted rows for display and upgrade.
     pub rows: Vec<UpgradableRow>,
+    /// Number of rows that were present when the overlay opened.
+    pub opened_row_count: usize,
+    /// Backend row counts captured when the overlay opened (keyed by `pm_index`).
+    pub opened_backend_counts: BTreeMap<usize, usize>,
     /// Cursor into [`Self::rows`].
     pub cursor: usize,
     /// Row indices selected for upgrade.
@@ -196,6 +200,7 @@ pub enum MultiUpgradeProgressEvent {
     StepDone {
         pm_index: usize,
         package_name: String,
+        used_full_system_update: bool,
         result: AppResult<String>,
     },
     Finished,
