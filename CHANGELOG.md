@@ -24,6 +24,8 @@ For install options, supported package managers, and the key reference, see [REA
 
 ---
 
+---
+
 
 ## [0.1.3] - 2026-04-23
 
